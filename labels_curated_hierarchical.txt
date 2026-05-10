@@ -1,0 +1,316 @@
+# --- People ---
+person
+man
+woman
+child
+baby
+boy
+girl
+family
+group
+crowd
+couple
+friends
+kids
+children
+portrait
+selfie
+
+# --- Life/Events ---
+birthday
+birthday party
+wedding
+anniversary
+holiday gathering
+vacation
+travel
+celebration
+party
+graduation
+christmas
+christmas tree
+halloween
+costume
+school event
+family gathering
+
+# --- Places/Indoor ---
+indoor
+home
+living room
+kitchen
+bedroom
+office
+restaurant
+hotel room
+classroom
+hospital room
+store
+church
+garage
+patio
+
+# --- Places/Outdoor ---
+outdoor
+beach
+harbor
+marina
+dock
+park
+city
+street
+building
+sidewalk
+parking lot
+road
+tourist attraction
+city view
+harbor view
+
+# --- Water/Marine ---
+boat
+ship
+cruise ship
+yacht
+sailboat
+fishing boat
+water
+ocean
+sea
+canal
+bridge
+pier
+dockside
+marina dock
+boat docked
+boat interior
+boat deck
+harbor water
+boat traveling
+
+# --- Nature ---
+sunset
+sunrise
+sky
+clouds
+trees
+plants
+flowers
+landscape
+mountains
+grass
+bird
+animal
+palm trees
+woods
+rocks
+beach sand
+
+# --- Documents/General ---
+document
+text document
+printed document
+handwritten document
+scanned document
+paper
+form
+application form
+letter
+agreement
+contract
+legal document
+signed document
+email printout
+document with signature
+
+# --- Documents/Finance ---
+invoice
+receipt
+statement
+financial statement
+bill
+insurance document
+tax document
+budget document
+financial report
+bank statement
+credit card statement
+contractor invoice
+hoa document
+association letter
+maintenance report
+property document
+real estate document
+meeting notes
+
+# --- Documents/Travel ---
+travel document
+boarding pass
+ticket
+passport
+map
+cruise document
+itinerary
+reservation
+hotel confirmation
+flight document
+
+# --- Digital/Screens ---
+screenshot
+computer screen
+phone screen
+tablet screen
+website
+app interface
+email screenshot
+text message
+chat screen
+spreadsheet screen
+banking screen
+large screen
+television
+monitor
+
+# --- Media/Objects ---
+book
+notebook
+magazine
+newspaper
+menu
+id card
+credit card
+phone
+camera
+clock
+mirror
+laptop
+remote control
+poster
+sign
+label
+
+# --- Food/Drink ---
+food
+meal
+plate of food
+restaurant meal
+drink
+coffee
+wine
+dessert
+cake
+pizza
+sandwich
+salad
+soup
+shrimp
+chicken
+vegetables
+bottle
+glass
+bowl
+plate
+
+# --- Transportation ---
+car
+truck
+bus
+train
+airplane
+airport
+parked car
+car seat
+plane flying
+driving
+
+# --- Activities ---
+standing
+sitting
+walking
+running
+sleeping
+reading
+writing
+working
+playing
+eating
+drinking
+swimming
+dancing
+riding
+watching
+cutting
+drawing
+
+# --- Composition/Quality ---
+close-up
+wide shot
+blurry
+low light
+bright
+high contrast
+black and white
+old photo
+damaged image
+corrupted image
+low quality
+duplicate
+dark image
+overexposed image
+
+# --- Furniture/Home ---
+table
+chair
+couch
+bed
+window
+floor
+wooden floor
+shelf
+refrigerator
+stove
+counter
+blanket
+high chair
+
+# --- Health/Medical ---
+hospital bed
+wheelchair
+medical room
+doctor office
+
+# --- Sports/Hobbies ---
+baseball
+skateboard
+guitar
+microphone
+toy
+stuffed animal
+toy car
+# --- SPORTS / MARTIAL ARTS ---
+sports
+kids sports
+children sports
+martial arts
+taekwondo
+karate
+sparring
+martial arts class
+taekwondo class
+training gym
+dojo
+sports uniform
+protective gear
+helmet
+chest protector
+instructor
+coach
+sport
+training
+sports class
+athletic class
+indoor gym
+gymnasium
+lesson
+practice
+competition

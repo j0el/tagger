@@ -1,0 +1,281 @@
+label,tags
+person,People/Person
+man,People/Man
+woman,People/Woman
+child,People/Child
+baby,People/Baby
+boy,People/Boy
+girl,People/Girl
+family,People/Family
+group,People/Group
+crowd,People/Crowd
+couple,People/Couple
+friends,People/Friends
+kids,People/Kids
+children,People/Children
+portrait,People/Portrait
+selfie,People/Selfie
+birthday,Life/Events/Birthday
+birthday party,Life/Events/Birthday party
+wedding,Life/Events/Wedding
+anniversary,Life/Events/Anniversary
+holiday gathering,Life/Events/Holiday gathering
+vacation,Life/Events/Vacation
+travel,Life/Events/Travel
+celebration,Life/Events/Celebration
+party,Life/Events/Party
+graduation,Life/Events/Graduation
+christmas,Life/Events/Christmas
+christmas tree,Life/Events/Christmas tree
+halloween,Life/Events/Halloween
+costume,Life/Events/Costume
+school event,Life/Events/School event
+family gathering,Life/Events/Family gathering
+indoor,Places/Indoor/Indoor
+home,Places/Indoor/Home
+living room,Places/Indoor/Living room
+kitchen,Places/Indoor/Kitchen
+bedroom,Places/Indoor/Bedroom
+office,Places/Indoor/Office
+restaurant,Places/Indoor/Restaurant
+hotel room,Places/Indoor/Hotel room
+classroom,Places/Indoor/Classroom
+hospital room,Places/Indoor/Hospital room
+store,Places/Indoor/Store
+church,Places/Indoor/Church
+garage,Places/Indoor/Garage
+patio,Places/Indoor/Patio
+outdoor,Places/Outdoor/Outdoor
+beach,Places/Outdoor/Beach
+harbor,Places/Outdoor/Harbor
+marina,Places/Outdoor/Marina
+dock,Places/Outdoor/Dock
+park,Places/Outdoor/Park
+city,Places/Outdoor/City
+street,Places/Outdoor/Street
+building,Places/Outdoor/Building
+sidewalk,Places/Outdoor/Sidewalk
+parking lot,Places/Outdoor/Parking lot
+road,Places/Outdoor/Road
+tourist attraction,Places/Outdoor/Tourist attraction
+city view,Places/Outdoor/City view
+harbor view,Places/Outdoor/Harbor view
+boat,Water/Marine/Boat|Travel/Cruise/Boat
+ship,Water/Marine/Ship|Travel/Cruise/Ship
+cruise ship,Water/Marine/Cruise ship|Travel/Cruise/Cruise ship
+yacht,Water/Marine/Yacht|Travel/Cruise/Yacht
+sailboat,Water/Marine/Sailboat|Travel/Cruise/Sailboat
+fishing boat,Water/Marine/Fishing boat|Travel/Cruise/Fishing boat
+water,Water/Marine/Water
+ocean,Water/Marine/Ocean
+sea,Water/Marine/Sea
+canal,Water/Marine/Canal
+bridge,Water/Marine/Bridge
+pier,Water/Marine/Pier
+dockside,Water/Marine/Dockside
+marina dock,Water/Marine/Marina dock
+boat docked,Water/Marine/Boat docked
+boat interior,Water/Marine/Boat interior
+boat deck,Water/Marine/Boat deck
+harbor water,Water/Marine/Harbor water
+boat traveling,Water/Marine/Boat traveling|Transportation/Boat traveling
+sunset,Nature/Sunset
+sunrise,Nature/Sunrise
+sky,Nature/Sky
+clouds,Nature/Clouds
+trees,Nature/Trees
+plants,Nature/Plants
+flowers,Nature/Flowers
+landscape,Nature/Landscape
+mountains,Nature/Mountains
+grass,Nature/Grass
+bird,Nature/Bird
+animal,Nature/Animal
+palm trees,Nature/Palm trees
+woods,Nature/Woods
+rocks,Nature/Rocks
+beach sand,Nature/Beach sand
+document,Documents/General/Document
+text document,Documents/General/Text document
+printed document,Documents/General/Printed document
+handwritten document,Documents/General/Handwritten document
+scanned document,Documents/General/Scanned document
+paper,Documents/General/Paper
+form,Documents/General/Form
+application form,Documents/General/Application form
+letter,Documents/General/Letter
+agreement,Documents/General/Agreement
+contract,Documents/General/Contract
+legal document,Documents/General/Legal document
+signed document,Documents/General/Signed document
+email printout,Documents/General/Email printout
+document with signature,Documents/General/Document with signature
+invoice,Documents/Finance/Invoice
+receipt,Documents/Finance/Receipt
+statement,Documents/Finance/Statement
+financial statement,Documents/Finance/Financial statement
+bill,Documents/Finance/Bill
+insurance document,Documents/Finance/Insurance document
+tax document,Documents/Finance/Tax document
+budget document,Documents/Finance/Budget document
+financial report,Documents/Finance/Financial report
+bank statement,Documents/Finance/Bank statement
+credit card statement,Documents/Finance/Credit card statement
+contractor invoice,Documents/Finance/Contractor invoice
+hoa document,Documents/Finance/Hoa document
+association letter,Documents/Finance/Association letter
+maintenance report,Documents/Finance/Maintenance report
+property document,Documents/Finance/Property document
+real estate document,Documents/Finance/Real estate document
+meeting notes,Documents/Finance/Meeting notes
+travel document,Documents/Travel/Travel document
+boarding pass,Documents/Travel/Boarding pass
+ticket,Documents/Travel/Ticket
+passport,Documents/Travel/Passport
+map,Documents/Travel/Map
+cruise document,Documents/Travel/Cruise document
+itinerary,Documents/Travel/Itinerary
+reservation,Documents/Travel/Reservation
+hotel confirmation,Documents/Travel/Hotel confirmation
+flight document,Documents/Travel/Flight document
+screenshot,Digital/Screens/Screenshot
+computer screen,Digital/Screens/Computer screen
+phone screen,Digital/Screens/Phone screen
+tablet screen,Digital/Screens/Tablet screen
+website,Digital/Screens/Website
+app interface,Digital/Screens/App interface
+email screenshot,Digital/Screens/Email screenshot
+text message,Digital/Screens/Text message
+chat screen,Digital/Screens/Chat screen
+spreadsheet screen,Digital/Screens/Spreadsheet screen
+banking screen,Digital/Screens/Banking screen
+large screen,Digital/Screens/Large screen
+television,Digital/Screens/Television
+monitor,Digital/Screens/Monitor
+book,Media/Objects/Book
+notebook,Media/Objects/Notebook
+magazine,Media/Objects/Magazine
+newspaper,Media/Objects/Newspaper
+menu,Media/Objects/Menu
+id card,Media/Objects/Id card
+credit card,Media/Objects/Credit card
+phone,Media/Objects/Phone
+camera,Media/Objects/Camera
+clock,Media/Objects/Clock
+mirror,Media/Objects/Mirror
+laptop,Media/Objects/Laptop
+remote control,Media/Objects/Remote control
+poster,Media/Objects/Poster
+sign,Media/Objects/Sign
+label,Media/Objects/Label
+food,Food/Drink/Food
+meal,Food/Drink/Meal
+plate of food,Food/Drink/Plate of food
+restaurant meal,Food/Drink/Restaurant meal
+drink,Food/Drink/Drink
+coffee,Food/Drink/Coffee
+wine,Food/Drink/Wine
+dessert,Food/Drink/Dessert
+cake,Food/Drink/Cake
+pizza,Food/Drink/Pizza
+sandwich,Food/Drink/Sandwich
+salad,Food/Drink/Salad
+soup,Food/Drink/Soup
+shrimp,Food/Drink/Shrimp
+chicken,Food/Drink/Chicken
+vegetables,Food/Drink/Vegetables
+bottle,Food/Drink/Bottle
+glass,Food/Drink/Glass
+bowl,Food/Drink/Bowl
+plate,Food/Drink/Plate
+car,Transportation/Car
+truck,Transportation/Truck
+bus,Transportation/Bus
+train,Transportation/Train
+airplane,Transportation/Airplane
+airport,Transportation/Airport
+parked car,Transportation/Parked car
+car seat,Transportation/Car seat
+plane flying,Transportation/Plane flying
+driving,Transportation/Driving
+standing,Activities/Standing
+sitting,Activities/Sitting
+walking,Activities/Walking
+running,Activities/Running
+sleeping,Activities/Sleeping
+reading,Activities/Reading
+writing,Activities/Writing
+working,Activities/Working
+playing,Activities/Playing
+eating,Activities/Eating
+drinking,Activities/Drinking
+swimming,Activities/Swimming
+dancing,Activities/Dancing
+riding,Activities/Riding
+watching,Activities/Watching
+cutting,Activities/Cutting
+drawing,Activities/Drawing
+close-up,Composition/Quality/Close-up
+wide shot,Composition/Quality/Wide shot
+blurry,Composition/Quality/Blurry
+low light,Composition/Quality/Low light
+bright,Composition/Quality/Bright
+high contrast,Composition/Quality/High contrast
+black and white,Composition/Quality/Black and white
+old photo,Composition/Quality/Old photo
+damaged image,Composition/Quality/Damaged image
+corrupted image,Composition/Quality/Corrupted image
+low quality,Composition/Quality/Low quality
+duplicate,Composition/Quality/Duplicate
+dark image,Composition/Quality/Dark image
+overexposed image,Composition/Quality/Overexposed image
+table,Furniture/Home/Table
+chair,Furniture/Home/Chair
+couch,Furniture/Home/Couch
+bed,Furniture/Home/Bed
+window,Furniture/Home/Window
+floor,Furniture/Home/Floor
+wooden floor,Furniture/Home/Wooden floor
+shelf,Furniture/Home/Shelf
+refrigerator,Furniture/Home/Refrigerator
+stove,Furniture/Home/Stove
+counter,Furniture/Home/Counter
+blanket,Furniture/Home/Blanket
+high chair,Furniture/Home/High chair
+hospital bed,Health/Medical/Hospital bed
+wheelchair,Health/Medical/Wheelchair
+medical room,Health/Medical/Medical room
+doctor office,Health/Medical/Doctor office
+baseball,Sports/Hobbies/Baseball
+skateboard,Sports/Hobbies/Skateboard
+guitar,Sports/Hobbies/Guitar
+microphone,Sports/Hobbies/Microphone
+toy,Sports/Hobbies/Toy
+stuffed animal,Sports/Hobbies/Stuffed animal
+toy car,Sports/Hobbies/Toy car
+sports,Sports
+kids sports,Sports/Kids sports
+children sports,Sports/Kids sports
+martial arts,Sports/Martial arts
+taekwondo,Sports/Martial arts/Taekwondo
+karate,Sports/Martial arts/Karate
+sparring,Sports/Martial arts/Sparring
+martial arts class,Sports/Martial arts/Class
+taekwondo class,Sports/Martial arts/Taekwondo class
+training gym,Places/Indoor/Training gym
+dojo,Places/Indoor/Dojo|Sports/Martial arts/Dojo
+sports uniform,Sports/Clothing/Sports uniform
+protective gear,Sports/Equipment/Protective gear
+helmet,Sports/Equipment/Helmet
+chest protector,Sports/Equipment/Chest protector
+instructor,People/Instructor
+coach,People/Coach
+sport,Sports
+training,Activities/Training
+sports class,Sports/Class
+athletic class,Sports/Class
+indoor gym,Places/Indoor/Indoor gym
+gymnasium,Places/Indoor/Gymnasium
+lesson,Activities/Lesson
+practice,Activities/Practice
+competition,Activities/Competition
