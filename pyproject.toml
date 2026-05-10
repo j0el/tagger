@@ -1,0 +1,15 @@
+[project]
+name = "immich-tagger"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "accelerate>=1.13.0",
+    "pillow>=12.2.0",
+    "pillow-heif>=1.3.0",
+    "protobuf>=7.34.1",
+    "sentencepiece>=0.2.1",
+    "torch>=2.11.0",
+    "torchvision>=0.26.0",
+    "tqdm>=4.67.3",
+    "transformers>=5.8.0",
+]
