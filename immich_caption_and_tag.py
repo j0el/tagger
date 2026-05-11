@@ -42,9 +42,11 @@ except Exception:
 
 try:
     import torch
-    from transformers import pipeline
+    from transformers import BlipForConditionalGeneration, BlipProcessor, pipeline
 except Exception:
     torch = None
+    BlipForConditionalGeneration = None
+    BlipProcessor = None
     pipeline = None
 
 
@@ -369,21 +371,6 @@ def ensure_rdf_description(root: ET.Element) -> ET.Element:
     if desc is None:
         desc = ET.SubElement(rdf, f"{{{NAMESPACES['rdf']}}}Description")
     return desc
-
-def upsert_description(tree: Optional[ET.ElementTree], description: str) -> ET.ElementTree:
-    if tree is None:
-        root = ET.Element(f"{{{NAMESPACES['x']}}}xmpmeta")
-        tree = ET.ElementTree(root)
-    root = tree.getroot()
-    desc = ensure_rdf_description(root)
-    for node in list(desc.findall("dc:description", NAMESPACES)):
-        desc.remove(node)
-    dc_desc = ET.SubElement(desc, f"{{{NAMESPACES['dc']}}}description")
-    alt = ET.SubElement(dc_desc, f"{{{NAMESPACES['rdf']}}}Alt")
-    li = ET.SubElement(alt, f"{{{NAMESPACES['rdf']}}}li")
-    li.set("{http://www.w3.org/XML/1998/namespace}lang", "x-default")
-    li.text = description
-    return tree
 
 
 def upsert_subject_description_and_ai_meta(
@@ -923,12 +910,38 @@ def clean_caption(outputs) -> Optional[str]:
     return text or None
 
 
+
 class CaptionRunner:
+    """Caption images with BLIP directly, or with the current VLM pipeline for newer models.
+
+    Newer Transformers releases no longer expose the old ``image-to-text`` pipeline
+    name, so BLIP is loaded directly instead of going through ``pipeline()``.
+    """
+
     def __init__(self, device: str, model_name: str, task: str, verbose: bool):
         ensure_deps()
         self.device_name = device
         self.task = task
         self.verbose = verbose
+        self.pipe = None
+        self.processor = None
+        self.model = None
+
+        if task == "image-to-text":
+            if "blip" not in model_name.lower():
+                raise RuntimeError(
+                    "This Transformers version no longer provides the old image-to-text pipeline. "
+                    "The direct fallback currently supports BLIP models; use a BLIP caption model or "
+                    "choose an image-text-to-text VLM model."
+                )
+            if verbose:
+                eprint(f"Loading direct BLIP caption model: {model_name} on {device}")
+            self.processor = BlipProcessor.from_pretrained(model_name)
+            self.model = BlipForConditionalGeneration.from_pretrained(model_name)
+            self.model.to(device)
+            self.model.eval()
+            return
+
         kwargs = {"model": model_name, "use_fast": True}
         if device == "cuda":
             kwargs["device"] = 0
@@ -936,36 +949,42 @@ class CaptionRunner:
             kwargs["device"] = "mps"
         else:
             kwargs["device"] = "cpu"
-        if task == "image-text-to-text":
-            kwargs["dtype"] = torch.float16 if device in ("cuda", "mps") else torch.float32
+        kwargs["dtype"] = torch.float16 if device in ("cuda", "mps") else torch.float32
         if verbose:
             eprint(f"Loading {task} caption model: {model_name} on {device}")
         self.pipe = pipeline(task, **kwargs)
 
+    def _caption_blip_batch(self, images: Sequence[Image.Image], max_new_tokens: int) -> List[Optional[str]]:
+        assert self.processor is not None and self.model is not None
+        inputs = self.processor(images=list(images), return_tensors="pt", padding=True)
+        inputs = {k: v.to(self.device_name) for k, v in inputs.items()}
+        with torch.inference_mode():
+            generated = self.model.generate(**inputs, max_new_tokens=max_new_tokens)
+        texts = self.processor.batch_decode(generated, skip_special_tokens=True)
+        return [clean_caption(text) for text in texts]
+
     def caption_one(self, image: Image.Image, prompt: str, max_new_tokens: int) -> Optional[str]:
         if self.task == "image-to-text":
-            outputs = self.pipe(image, max_new_tokens=max_new_tokens)
-        else:
-            outputs = self.pipe({"images": image, "text": prompt}, max_new_tokens=max_new_tokens)
+            return self._caption_blip_batch([image], max_new_tokens)[0]
+        assert self.pipe is not None
+        outputs = self.pipe({"images": image, "text": prompt}, max_new_tokens=max_new_tokens)
         return clean_caption(outputs)
 
     def caption_batch(self, images: Sequence[Image.Image], prompt: str, max_new_tokens: int) -> List[Optional[str]]:
         if not images:
             return []
         if self.task == "image-to-text":
-            outputs = self.pipe(list(images), max_new_tokens=max_new_tokens)
-            return [clean_caption(one) for one in outputs]
+            return self._caption_blip_batch(images, max_new_tokens)
         return [self.caption_one(img, prompt, max_new_tokens) for img in images]
-
 
 def write_caption_to_xmp(path: Path, caption: str, dry_run: bool) -> bool:
     xmp_path = sidecar_path_for_media(path)
-    _existing_tags, existing_desc, _last_tagged, tree = read_xmp(xmp_path)
+    existing_tags, existing_desc, last_tagged, tree = read_xmp(xmp_path)
     if existing_desc:
         return False
     if dry_run:
         return True
-    tree = upsert_description(tree, caption)
+    tree = upsert_subject_description_and_ai_meta(tree, existing_tags, caption, "caption-only")
     tree.write(xmp_path, encoding="utf-8", xml_declaration=True)
     return True
 
@@ -1114,30 +1133,7 @@ def caption_fallback_labels(
         if matched:
             hits.append((score, map_label(lab, taxonomy)))
 
-    cue_map = {
-        "christmas": ["holiday/christmas", "holiday/christmas lights"],
-        "christmas light": ["holiday/christmas lights"],
-        "light display": ["holiday/christmas lights", "place/home/yard"],
-        "yard": ["place/home/yard"],
-        "selfie": ["people/selfie"],
-        "fountain": ["place/fountain"],
-        "screen": ["digital/screen"],
-        "document": ["document"],
-        "receipt": ["document/receipt"],
-        "invoice": ["document/invoice"],
-        "boat": ["marine/boat"],
-        "ship": ["marine/ship"],
-        "cruise": ["travel/cruise"],
-        "pharalope": ["wildlife/bird/phalarope", "wildlife/bird/red phalarope", "nature/water"],
-        "phalarope": ["wildlife/bird/phalarope", "wildlife/bird/red phalarope", "nature/water"],
-        "bird": ["wildlife/bird"],
-        "duck": ["wildlife/bird/duck"],
-        "goose": ["wildlife/bird/goose"],
-    }
-    for cue, tags in cue_map.items():
-        if cue in cap:
-            for tag in tags:
-                hits.append((90, normalize_tag(tag)))
+
 
     hits.sort(key=lambda kv: (-kv[0], kv[1]))
     return dedupe_preserve_order([tag for _score, tag in hits])[:max_tags]
@@ -1149,11 +1145,7 @@ def caption_rescue_labels(
     taxonomy: Dict[str, List[str]],
     max_tags: int,
 ) -> List[str]:
-    """Last-resort caption rescue for strong existing captions.
-
-    This can create conservative hierarchical tags from captions such as
-    "Red Pharalope" even when that exact phrase is not in labels.txt.
-    """
+    """Last-resort fallback: create only a caption/... tag."""
     if not caption:
         return []
 
@@ -1161,47 +1153,11 @@ def caption_rescue_labels(
     if not cap:
         return []
 
-    tags: List[str] = []
-
-    if any(cue in cap for cue in BIRD_CUE_WORDS):
-        tags.extend(["wildlife/bird", "wildlife/waterbird"])
-        if "phalarope" in cap:
-            tags.extend([
-                "wildlife/bird/phalarope",
-                "wildlife/bird/red phalarope" if "red" in cap else "wildlife/bird/phalarope",
-            ])
-        elif "duck" in cap:
-            tags.append("wildlife/bird/duck")
-        elif "goose" in cap:
-            tags.append("wildlife/bird/goose")
-        elif "gull" in cap or "seagull" in cap:
-            tags.append("wildlife/bird/gull")
-        elif "heron" in cap:
-            tags.append("wildlife/bird/heron")
-        elif "egret" in cap:
-            tags.append("wildlife/bird/egret")
-        elif "pelican" in cap:
-            tags.append("wildlife/bird/pelican")
-        elif "sandpiper" in cap:
-            tags.append("wildlife/bird/shorebird")
-
-    if any(w in cap for w in ("water", "ocean", "pond", "lake", "harbor", "phalarope", "duck", "goose")):
-        tags.append("nature/water")
-
-    labels_norm = {normalize_tag(label).replace("pharalope", "phalarope"): label for label in labels}
-    if cap in labels_norm:
-        tags.extend(map_labels(labels_norm[cap], taxonomy))
-
     words = [w for w in cap.split() if w not in CAPTION_RESCUE_STOPWORDS]
-    if 1 <= len(words) <= 4 and len(cap) <= 60:
-        if "phalarope" in cap:
-            tags.append("wildlife/bird/red phalarope" if "red" in cap else "wildlife/bird/phalarope")
-        else:
-            tags.append("caption/" + cap)
+    if 1 <= len(words) <= 8 and len(cap) <= 90:
+        return ["caption/" + cap]
 
-    return dedupe_preserve_order([normalize_tag(t) for t in tags if normalize_tag(t)])[:max_tags]
-
-
+    return []
 
 def classify_prepared_media(
     runner: ModelRunner,
@@ -1308,6 +1264,8 @@ def main() -> int:
         if args.include_videos:
             eprint(f"Videos enabled: sampling {args.video_frames} frame(s) per video")
 
+    runner = ModelRunner(device, args.zero_shot_model, args.verbose)
+
     db_path = Path(args.db_path).expanduser().resolve()
     conn = sqlite3.connect(db_path)
     init_db(conn)
@@ -1320,11 +1278,6 @@ def main() -> int:
         captioned, caption_skipped, caption_errors = create_missing_captions(all_image_paths, args, device)
         if args.verbose:
             eprint(f"Caption phase: captioned={captioned} skipped_existing={caption_skipped} errors={caption_errors}")
-
-    # Load the tagging model after captioning, so the caption model and tag model
-    # do not need to sit in memory at the same time.
-    runner = ModelRunner(device, args.zero_shot_model, args.verbose)
-
     media_paths = filter_media(all_media_paths, args)
 
     if args.limit > 0:

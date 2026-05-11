@@ -81,7 +81,7 @@ def read_taxonomy_paths(path: Optional[Path]) -> set[str]:
             for tag in tags.split("|"):
                 tag = tag.strip()
                 if tag:
-                    out.add(tag)
+                    out.add(tag.casefold())
     return out
 
 
@@ -159,7 +159,7 @@ def main() -> int:
             raw = strip_ai_prefix(tag)
             if "/" in raw:
                 hierarchy_counter.update(hierarchy_levels(raw))
-            if tag.startswith(AI_PREFIX) and taxonomy_paths and raw not in taxonomy_paths:
+            if tag.startswith(AI_PREFIX) and taxonomy_paths and raw.casefold() not in taxonomy_paths:
                 unmapped_ai_tags[raw] += 1
 
         per_sidecar.append({
