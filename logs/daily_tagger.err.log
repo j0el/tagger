@@ -1,0 +1,4 @@
+/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/resource_tracker.py:396: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/mp-4uvu7c07'}
+  warnings.warn(
+Loading weights:   0%|          | 0/888 [00:00<?, ?it/s]Loading weights:  74%|███████▍  | 656/888 [00:00<00:00, 6559.15it/s]Loading weights: 100%|██████████| 888/888 [00:00<00:00, 8630.24it/s]
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
