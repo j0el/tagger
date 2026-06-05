@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""
+Reporting tool. CURRENT.
+
+Summarizes captions and tags found in XMP sidecars, optionally validating tag
+paths against labels_taxonomy_map.csv and writing CSV/JSON reports.
+"""
 from __future__ import annotations
 
 import argparse

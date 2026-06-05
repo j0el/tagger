@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+"""
+Main one-pass caption + tagging tool. CURRENT / canonical entry point.
+
+Scans images (and optionally videos), writes XMP sidecars, creates a caption
+only when none exists, then assigns hierarchical AI tags from the curated
+label list and taxonomy map. Falls back to caption-mined tags when the
+classifier finds nothing. Human tags are preserved; existing ai: tags are
+replaced on each run. Uses a sqlite cache so daily runs mostly touch new images.
+"""
 from __future__ import annotations
 
 import argparse

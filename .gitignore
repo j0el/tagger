@@ -25,3 +25,10 @@ tag_stats_*.json
 *.swp
 .idea/
 .vscode/
+
+# Generated artifacts
+logs/
+results.txt
+noun_candidates*.csv
+caption_noun_candidates.csv
+caption_noun_candidates.json

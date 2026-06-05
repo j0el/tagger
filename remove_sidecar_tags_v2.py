@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""
+Sidecar cleanup tool. CURRENT (supersedes the removed v1).
+
+Removes unwanted Google-Takeout / immich-go tags from XMP sidecars. Dry-run by
+default; pass --apply to write.
+"""
 from __future__ import annotations
 
 import argparse

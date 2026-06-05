@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""
+Label-discovery helper. CURRENT.
+
+Reads existing XMP captions, builds a noun-frequency list, and can append the
+most useful candidates to the curated label list and taxonomy map. Also wrapped
+by the Streamlit GUI (Caption noun candidates tab) — do not remove.
+"""
 from __future__ import annotations
 
 import argparse

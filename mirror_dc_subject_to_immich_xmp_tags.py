@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""
+Specialty interop tool. CURRENT.
+
+Mirrors XMP dc:subject tags into digiKam:TagsList and lr:HierarchicalSubject so
+tags are visible to Immich, digiKam, and Lightroom. Dry-run by default; pass
+--apply to write. Standalone — not part of the main tagging pass.
+"""
 from __future__ import annotations
 
 import argparse

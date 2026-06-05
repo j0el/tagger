@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""
+Taxonomy maintenance tool. CURRENT.
+
+Safely adds, removes, renames, shows, and audits curated labels and their
+hierarchy mappings across labels_curated_hierarchical.txt and
+labels_taxonomy_map.csv. Every mutating command writes timestamped backups first.
+"""
 from __future__ import annotations
 
 import argparse
