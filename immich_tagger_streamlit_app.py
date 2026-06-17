@@ -41,7 +41,7 @@ except Exception:
     HEIF_ENABLED = False
 
 APP_TITLE = "Immich Caption + Tag Tools"
-DEFAULT_ROOT = "/Volumes/oldmacData/library/upload"
+DEFAULT_ROOT = "/opt/stacks/immich-app/library/upload"
 DEFAULT_LABELS = "labels_curated_hierarchical.txt"
 DEFAULT_TAXONOMY = "labels_taxonomy_map.csv"
 DEFAULT_DB = ".immich_auto_tagger_cache.sqlite3"

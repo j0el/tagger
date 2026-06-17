@@ -9,7 +9,7 @@ echo "===== $(date) Starting daily Immich caption/tag run ====="
 echo "Working directory: $(pwd)"
 echo "uv path: $(command -v uv || true)"
 
-uv run python immich_caption_and_tag.py /Volumes/oldmacData/library/upload \
+uv run python immich_caption_and_tag.py /opt/stacks/immich-app/library/upload  \
   --recurse \
   --labels-file labels_curated_hierarchical.txt \
   --taxonomy-map labels_taxonomy_map.csv \
