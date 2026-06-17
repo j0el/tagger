@@ -16,6 +16,9 @@ __pycache__/
 tag_stats_*.csv
 tag_stats_*.json
 
+# Secrets
+.env
+
 # macOS
 .DS_Store
 
