@@ -1,0 +1,576 @@
+#!/usr/bin/env python3
+"""
+API-based caption + tagging tool (v2).
+
+Finds new (or all) Immich assets via the API, runs SigLIP zero-shot classification
+for hierarchical tags, generates captions via a local Ollama VLM, and writes results
+back through the Immich API — no sidecar files touched.
+
+People already identified by Immich face recognition are injected into the caption
+prompt so the VLM can name them instead of saying "a man" or "two boys".
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import io
+import json
+import os
+import re
+import sqlite3
+import sys
+import time
+import warnings
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+
+warnings.filterwarnings("ignore", message="Using a slow image processor")
+warnings.filterwarnings("ignore", message=".*AutoModelForVision2Seq.*deprecated.*")
+warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*")
+
+from PIL import Image, ImageOps, UnidentifiedImageError
+from tqdm import tqdm
+
+from immich_api import AssetInfo, ImmichClient
+from vlm_backend import DEFAULT_CAPTION_PROMPT, OllamaVLM
+
+try:
+    import torch
+    from transformers import pipeline as hf_pipeline
+except Exception:
+    torch = None
+    hf_pipeline = None
+
+# ------------------------------------------------------------------ #
+# Constants                                                            #
+# ------------------------------------------------------------------ #
+
+DEFAULT_ZERO_SHOT_MODEL = "google/siglip-so400m-patch14-384"
+DEFAULT_VLM_MODEL = "qwen2.5vl:7b"
+AI_PREFIX = "ai:"
+
+
+# ------------------------------------------------------------------ #
+# Argument parsing                                                     #
+# ------------------------------------------------------------------ #
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Tag and caption Immich assets via the API using SigLIP + a local VLM."
+    )
+
+    # --- Data sources ---
+    p.add_argument("--labels-file", required=True, help="Newline-separated candidate labels.")
+    p.add_argument("--taxonomy-map", default=None, help="CSV mapping label → hierarchical tag.")
+    p.add_argument("--db-path", default=".immich_tagger_v2_cache.sqlite3", help="SQLite cache path.")
+
+    # --- Asset selection ---
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--reprocess-all", action="store_true",
+                   help="Process every asset in the library (ignores last-run date; respects model-sig cache).")
+    g.add_argument("--since", default=None,
+                   help="Only process assets created after this ISO date (overrides saved last-run date).")
+    p.add_argument("--reprocess-captions", action="store_true",
+                   help="Re-generate captions even when the asset already has a description.")
+    p.add_argument("--force", action="store_true",
+                   help="Re-classify even if result is already cached for this model signature.")
+    p.add_argument("--limit", type=int, default=0, help="Stop after processing this many assets.")
+
+    # --- Models ---
+    p.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
+    p.add_argument("--zero-shot-model", default=DEFAULT_ZERO_SHOT_MODEL)
+    p.add_argument("--skip-captioning", action="store_true",
+                   help="Skip VLM caption generation entirely.")
+    p.add_argument("--vlm-model", default=DEFAULT_VLM_MODEL,
+                   help="Ollama model name for captioning (default: qwen2.5vl:7b).")
+    p.add_argument("--vlm-url", default="http://localhost:11434",
+                   help="Ollama base URL.")
+    p.add_argument("--vlm-timeout", type=int, default=120,
+                   help="Seconds to wait for a VLM response per image.")
+    p.add_argument("--caption-prompt", default=None,
+                   help="Caption prompt template. Use {people_clause} for name injection. "
+                        "Defaults to the built-in template in vlm_backend.py.")
+
+    # --- Classification thresholds ---
+    p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--top-k", type=int, default=6)
+    p.add_argument("--threshold", type=float, default=0.32)
+    p.add_argument("--relative-threshold", type=float, default=0.70)
+    p.add_argument("--fallback-threshold", type=float, default=0.20)
+    p.add_argument("--fallback-relative-threshold", type=float, default=0.50)
+    p.add_argument("--fallback-top-k", type=int, default=3)
+    p.add_argument("--max-side", type=int, default=768)
+
+    # --- Output ---
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print what would change; write nothing to Immich.")
+    p.add_argument("--verbose", action="store_true")
+
+    return p.parse_args()
+
+
+# ------------------------------------------------------------------ #
+# Label / taxonomy utilities (self-contained, no v1 import)           #
+# ------------------------------------------------------------------ #
+
+def read_labels(labels_file: Path) -> List[str]:
+    labels: List[str] = []
+    for line in labels_file.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if s and not s.startswith("#"):
+            labels.append(s)
+    if not labels:
+        raise ValueError(f"No labels found in {labels_file}")
+    return labels
+
+
+def normalize_tag(s: str) -> str:
+    s = s.strip().lower().replace("_", " ")
+    s = re.sub(r"[^a-z0-9:+#&' /-]+", "", s)
+    s = re.sub(r"\s+", " ", s).strip(" -/")
+    return s
+
+
+def read_taxonomy_map(path: Optional[Path]) -> Dict[str, List[str]]:
+    if not path or not path.exists():
+        return {}
+    mapping: Dict[str, List[str]] = {}
+    with path.open("r", encoding="utf-8", newline="") as f:
+        sample = f.read(4096)
+        f.seek(0)
+        has_header = "label" in sample.lower() and ("tag" in sample.lower() or "taxonomy" in sample.lower())
+        reader = csv.DictReader(f) if has_header else None
+        if reader:
+            cols = [c or "" for c in (reader.fieldnames or [])]
+            label_col = next(
+                (c for c in cols if c.lower() in ("label", "raw_label", "source", "source_label")), cols[0]
+            )
+            tag_col = next(
+                (c for c in cols if c.lower() in ("tags", "tag", "hierarchical_tag", "taxonomy_tag", "mapped_tag")),
+                cols[-1],
+            )
+            for row in reader:
+                label = normalize_tag(row.get(label_col, ""))
+                raw_tags = row.get(tag_col, "") or ""
+                tags = [normalize_tag(p) for p in re.split(r"[|;]", raw_tags) if normalize_tag(p)]
+                if label and tags:
+                    mapping[label] = _dedupe(tags)
+        else:
+            f.seek(0)
+            for row in csv.reader(f):
+                if len(row) >= 2:
+                    label = normalize_tag(row[0])
+                    tags = [normalize_tag(p) for p in re.split(r"[|;]", row[1]) if normalize_tag(p)]
+                    if label and tags:
+                        mapping[label] = _dedupe(tags)
+    return mapping
+
+
+def map_labels(label: str, taxonomy: Dict[str, List[str]]) -> List[str]:
+    return taxonomy.get(normalize_tag(label), [normalize_tag(label)])
+
+
+def _dedupe(items: Sequence[str]) -> List[str]:
+    seen: set[str] = set()
+    out: List[str] = []
+    for item in items:
+        key = item.casefold()
+        if key not in seen:
+            seen.add(key)
+            out.append(item)
+    return out
+
+
+def make_ai_tag(raw: str) -> str:
+    """Normalize a raw taxonomy tag and prepend ai: if not already present."""
+    t = normalize_tag(raw)
+    return t if t.startswith(AI_PREFIX) else f"{AI_PREFIX}{t}"
+
+
+# ------------------------------------------------------------------ #
+# SigLIP zero-shot runner                                             #
+# ------------------------------------------------------------------ #
+
+def choose_device(device_arg: str) -> str:
+    if device_arg != "auto":
+        return device_arg
+    if torch is not None and torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def normalize_image_for_model(img: Image.Image, max_side: int) -> Image.Image:
+    img = ImageOps.exif_transpose(img).convert("RGB")
+    w, h = img.size
+    long_side = max(w, h)
+    if long_side > max_side:
+        scale = max_side / float(long_side)
+        img = img.resize(
+            (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+            Image.Resampling.LANCZOS,
+        )
+    return img
+
+
+class ZeroShotRunner:
+    def __init__(self, device: str, model_name: str, verbose: bool = False):
+        if hf_pipeline is None:
+            raise RuntimeError("transformers not available — install with: uv add transformers torch")
+        if verbose:
+            print(f"Loading zero-shot model: {model_name} on {device}", file=sys.stderr)
+        kwargs: dict = {"model": model_name, "use_fast": True}
+        if device == "cuda":
+            kwargs["device"] = 0
+        else:
+            kwargs["device"] = "cpu"
+        self._pipe = hf_pipeline("zero-shot-image-classification", **kwargs)
+
+    def classify_batch(
+        self,
+        images: Sequence[Image.Image],
+        labels: Sequence[str],
+        top_k: int,
+        threshold: float,
+        relative_threshold: float,
+    ) -> List[List[Tuple[str, float]]]:
+        outputs = self._pipe(list(images), candidate_labels=list(labels))
+        # When a single image is passed the pipeline may unwrap the list.
+        if images and isinstance(outputs, list) and outputs and isinstance(outputs[0], dict):
+            outputs = [outputs]
+        results: List[List[Tuple[str, float]]] = []
+        for one in outputs:
+            pairs = [(normalize_tag(str(item["label"])), float(item["score"])) for item in one]
+            pairs.sort(key=lambda x: x[1], reverse=True)
+            best = pairs[0][1] if pairs else 0.0
+            filtered = [
+                (lab, sc) for lab, sc in pairs
+                if sc >= threshold and sc >= best * relative_threshold
+            ][:top_k]
+            results.append(filtered)
+        return results
+
+
+# ------------------------------------------------------------------ #
+# SQLite cache                                                         #
+# ------------------------------------------------------------------ #
+
+def init_db(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS asset_cache (
+            asset_id   TEXT PRIMARY KEY,
+            model_sig  TEXT NOT NULL DEFAULT '',
+            tagged_at  REAL NOT NULL DEFAULT 0,
+            data_json  TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS run_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """
+    )
+    conn.commit()
+
+
+def model_signature(args: argparse.Namespace, labels: Sequence[str], taxonomy: Dict[str, List[str]]) -> str:
+    payload = {
+        "zero_shot_model": args.zero_shot_model,
+        "vlm_model": args.vlm_model,
+        "labels": list(labels),
+        "taxonomy": taxonomy,
+        "threshold": args.threshold,
+        "relative_threshold": args.relative_threshold,
+        "top_k": args.top_k,
+        "fallback_threshold": args.fallback_threshold,
+        "fallback_relative_threshold": args.fallback_relative_threshold,
+        "fallback_top_k": args.fallback_top_k,
+        "skip_captioning": args.skip_captioning,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()[:16]
+
+
+def is_cached(conn: sqlite3.Connection, asset_id: str, model_sig: str) -> bool:
+    row = conn.execute(
+        "SELECT model_sig FROM asset_cache WHERE asset_id = ?", (asset_id,)
+    ).fetchone()
+    return row is not None and row[0] == model_sig
+
+
+def put_cache(conn: sqlite3.Connection, asset_id: str, model_sig: str, data: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO asset_cache(asset_id, model_sig, tagged_at, data_json)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(asset_id) DO UPDATE SET
+            model_sig=excluded.model_sig,
+            tagged_at=excluded.tagged_at,
+            data_json=excluded.data_json
+        """,
+        (asset_id, model_sig, time.time(), json.dumps(data)),
+    )
+    conn.commit()
+
+
+def get_last_run_date(conn: sqlite3.Connection) -> Optional[datetime]:
+    row = conn.execute("SELECT value FROM run_state WHERE key = 'last_run_at'").fetchone()
+    if not row:
+        return None
+    try:
+        return datetime.fromisoformat(row[0])
+    except Exception:
+        return None
+
+
+def set_last_run_date(conn: sqlite3.Connection, dt: datetime) -> None:
+    conn.execute(
+        "INSERT INTO run_state(key, value) VALUES ('last_run_at', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (dt.isoformat(),),
+    )
+    conn.commit()
+
+
+# ------------------------------------------------------------------ #
+# Tag helpers                                                          #
+# ------------------------------------------------------------------ #
+
+def compute_ai_tags(
+    preds: List[Tuple[str, float]],
+    taxonomy: Dict[str, List[str]],
+    top_k: int,
+) -> List[str]:
+    """Map raw SigLIP predictions to deduplicated ai: taxonomy tags."""
+    seen: set[str] = set()
+    tags: List[str] = []
+    for label, _score in preds[:top_k]:
+        for raw in map_labels(label, taxonomy):
+            t = make_ai_tag(raw)
+            key = t.casefold()
+            if key not in seen:
+                seen.add(key)
+                tags.append(t)
+    return tags
+
+
+# ------------------------------------------------------------------ #
+# Main                                                                 #
+# ------------------------------------------------------------------ #
+
+def main() -> int:
+    args = parse_args()
+
+    # Credentials from environment (set by run script via .env)
+    base_url = os.environ.get("IMMICH_URL", "").strip()
+    api_key = os.environ.get("IMMICH_API_KEY", "").strip()
+    if not base_url or not api_key:
+        print("ERROR: IMMICH_URL and IMMICH_API_KEY must be set in the environment.", file=sys.stderr)
+        return 1
+
+    # Fix accidental double-scheme from old .env
+    base_url = re.sub(r"^https?://https?://", "https://", base_url)
+
+    labels_file = Path(args.labels_file).expanduser().resolve()
+    labels = read_labels(labels_file)
+    taxonomy = read_taxonomy_map(Path(args.taxonomy_map).expanduser().resolve() if args.taxonomy_map else None)
+    model_sig = model_signature(args, labels, taxonomy)
+    device = choose_device(args.device)
+
+    if args.verbose:
+        print(f"Device: {device}", file=sys.stderr)
+        print(f"Labels: {len(labels)} from {labels_file}", file=sys.stderr)
+        print(f"Taxonomy entries: {len(taxonomy)}", file=sys.stderr)
+
+    # --- Immich client ---
+    client = ImmichClient(base_url, api_key)
+    print("Loading Immich tag catalogue...", file=sys.stderr)
+    client.load_all_tags()
+    if args.verbose:
+        print(f"  {len(client._tag_cache)} tags loaded", file=sys.stderr)
+
+    # --- VLM ---
+    vlm: Optional[OllamaVLM] = None
+    caption_prompt = args.caption_prompt or DEFAULT_CAPTION_PROMPT
+    if not args.skip_captioning:
+        vlm = OllamaVLM(args.vlm_model, base_url=args.vlm_url, timeout=args.vlm_timeout)
+        if not vlm.is_available():
+            print(
+                f"WARNING: Ollama not reachable at {args.vlm_url}. "
+                "Captions will be skipped. Install Ollama or pass --skip-captioning.",
+                file=sys.stderr,
+            )
+            vlm = None
+        elif args.verbose:
+            print(f"VLM: {args.vlm_model} via {args.vlm_url}", file=sys.stderr)
+
+    # --- Zero-shot model ---
+    print("Loading zero-shot classification model...", file=sys.stderr)
+    runner = ZeroShotRunner(device, args.zero_shot_model, verbose=args.verbose)
+
+    # --- SQLite cache ---
+    db_path = Path(args.db_path).expanduser().resolve()
+    conn = sqlite3.connect(db_path)
+    init_db(conn)
+
+    # --- Asset list ---
+    if args.reprocess_all:
+        since: Optional[datetime] = None
+        print("Mode: reprocess ALL assets", file=sys.stderr)
+    elif args.since:
+        since = datetime.fromisoformat(args.since).replace(tzinfo=timezone.utc)
+        print(f"Mode: assets created after {since.date()}", file=sys.stderr)
+    else:
+        since = get_last_run_date(conn)
+        if since:
+            print(f"Mode: assets created after last run ({since.date()})", file=sys.stderr)
+        else:
+            print("Mode: no last-run date found — processing ALL assets (first run)", file=sys.stderr)
+
+    print("Fetching asset list from Immich...", file=sys.stderr)
+    assets = list(tqdm(client.find_new_assets(since=since), desc="Fetching", unit="asset"))
+
+    if args.limit > 0:
+        assets = assets[: args.limit]
+
+    if not assets:
+        print("No assets to process.", file=sys.stderr)
+        if not args.reprocess_all:
+            set_last_run_date(conn, datetime.now(timezone.utc))
+        conn.close()
+        return 0
+
+    print(f"Assets to process: {len(assets)}", file=sys.stderr)
+
+    written = 0
+    skipped = 0
+    errors = 0
+    caption_count = 0
+
+    batch_size = args.batch_size
+
+    for batch_start in tqdm(range(0, len(assets), batch_size), desc="Batches"):
+        batch = assets[batch_start : batch_start + batch_size]
+
+        # Filter cached
+        to_process: List[Tuple[AssetInfo, Image.Image, bytes]] = []
+        for asset in batch:
+            if not args.force and is_cached(conn, asset.id, model_sig):
+                skipped += 1
+                continue
+            try:
+                thumb_bytes = client.get_thumbnail(asset.id)
+                img = Image.open(io.BytesIO(thumb_bytes))
+                img = normalize_image_for_model(img, args.max_side)
+                to_process.append((asset, img, thumb_bytes))
+            except Exception as exc:
+                errors += 1
+                if args.verbose:
+                    print(f"Thumbnail error {asset.id} ({asset.file_name}): {exc}", file=sys.stderr)
+
+        if not to_process:
+            continue
+
+        # SigLIP classification
+        images = [img for _, img, _ in to_process]
+        try:
+            primary_preds = runner.classify_batch(
+                images, labels, args.top_k, args.threshold, args.relative_threshold
+            )
+        except Exception as exc:
+            errors += len(to_process)
+            print(f"Classification batch failed: {exc}", file=sys.stderr)
+            continue
+
+        # Fallback thresholds for images that matched nothing
+        fallback_indices = [i for i, p in enumerate(primary_preds) if not p]
+        if fallback_indices:
+            fallback_preds = runner.classify_batch(
+                [images[i] for i in fallback_indices],
+                labels,
+                args.fallback_top_k,
+                args.fallback_threshold,
+                args.fallback_relative_threshold,
+            )
+            for idx, preds in zip(fallback_indices, fallback_preds):
+                primary_preds[idx] = preds
+
+        for (asset, _img, thumb_bytes), preds in zip(to_process, primary_preds):
+            ai_tags = compute_ai_tags(preds, taxonomy, args.top_k)
+
+            # Caption
+            new_description = asset.description
+            if vlm and (not asset.description or args.reprocess_captions):
+                try:
+                    caption = vlm.caption(thumb_bytes, asset.people_names, caption_prompt)
+                    if caption:
+                        new_description = caption
+                        caption_count += 1
+                except Exception as exc:
+                    if args.verbose:
+                        print(f"VLM error for {asset.id}: {exc}", file=sys.stderr)
+
+            if args.verbose or args.dry_run:
+                people_str = f", people={asset.people_names}" if asset.people_names else ""
+                print(f"\n{asset.file_name} ({asset.id}){people_str}")
+                print(f"  tags: {ai_tags}")
+                if new_description:
+                    print(f"  caption: {new_description}")
+                if preds:
+                    print(f"  scores: {[(l, round(s, 3)) for l, s in preds[:5]]}")
+
+            if args.dry_run:
+                written += 1
+                continue
+
+            try:
+                # In reprocess mode, remove stale ai: tags before assigning new ones
+                if args.reprocess_all:
+                    old_tag_ids = client.get_asset_ai_tag_ids(asset.id)
+                    for old_id in old_tag_ids:
+                        client.remove_tag_from_assets(old_id, [asset.id])
+
+                # Assign new ai: tags
+                for tag_value in ai_tags:
+                    tag_id = client.ensure_tag(tag_value)
+                    client.assign_tag_to_assets(tag_id, [asset.id])
+
+                # Update description if it changed
+                if new_description and new_description != asset.description:
+                    client.update_description(asset.id, new_description)
+
+                put_cache(conn, asset.id, model_sig, {
+                    "tags": ai_tags,
+                    "description": new_description,
+                })
+                written += 1
+            except Exception as exc:
+                errors += 1
+                print(f"API write error for {asset.id}: {exc}", file=sys.stderr)
+
+        # Clear GPU cache if using CUDA
+        if device == "cuda" and torch is not None:
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+    # Update last-run date for future incremental runs
+    if not args.reprocess_all and not args.dry_run:
+        set_last_run_date(conn, datetime.now(timezone.utc))
+
+    conn.close()
+
+    print(
+        f"\nDone. assets={len(assets)} written={written} skipped_cached={skipped} "
+        f"captions={caption_count} errors={errors}"
+    )
+    if args.dry_run:
+        print("Dry run — nothing written to Immich.")
+    return 0 if errors == 0 else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
