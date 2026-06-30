@@ -23,7 +23,7 @@ import sys
 import time
 import warnings
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
@@ -112,6 +112,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--verbose", action="store_true")
     p.add_argument("--no-caption-tags", action="store_true",
                    help="Disable caption-noun fallback tagging when zero-shot finds nothing.")
+    p.add_argument("--stop-at", default=None, metavar="HH:MM",
+                   help="Stop gracefully when local time reaches HH:MM (for overnight windows).")
 
     return p.parse_args()
 
@@ -401,6 +403,9 @@ def caption_based_tags(
             continue
         if label_stems.issubset(caption_stems):
             for raw in raw_tags:
+                # Skip the legacy Prospective/Nouns holding area — too generic
+                if raw.lower().startswith("prospective/"):
+                    continue
                 t = make_ai_tag(raw)
                 key = t.casefold()
                 if key not in seen:
@@ -427,6 +432,16 @@ def main() -> int:
 
     # Fix accidental double-scheme from old .env
     base_url = re.sub(r"^https?://https?://", "https://", base_url)
+
+    # --- Time window ---
+    stop_dt: Optional[datetime] = None
+    if args.stop_at:
+        h, m = map(int, args.stop_at.split(":"))
+        now = datetime.now()
+        stop_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if stop_dt <= now:
+            stop_dt += timedelta(days=1)
+        print(f"Will stop at {stop_dt.strftime('%a %Y-%m-%d %H:%M')} local time", file=sys.stderr)
 
     labels_file = Path(args.labels_file).expanduser().resolve()
     labels = read_labels(labels_file)
@@ -506,7 +521,13 @@ def main() -> int:
 
     batch_size = args.batch_size
 
+    time_stopped = False
     for batch_start in tqdm(range(0, len(assets), batch_size), desc="Batches"):
+        if stop_dt and datetime.now() >= stop_dt:
+            print(f"\nTime window ended at {args.stop_at}. Stopping — resume tomorrow night.", file=sys.stderr)
+            time_stopped = True
+            break
+
         batch = assets[batch_start : batch_start + batch_size]
 
         # Filter cached
@@ -553,6 +574,11 @@ def main() -> int:
                 primary_preds[idx] = preds
 
         for (asset, _img, thumb_bytes), preds in zip(to_process, primary_preds):
+            if stop_dt and datetime.now() >= stop_dt:
+                print(f"\nTime window ended at {args.stop_at}. Stopping — resume tomorrow night.", file=sys.stderr)
+                time_stopped = True
+                break
+
             ai_tags = compute_ai_tags(preds, taxonomy, args.top_k)
 
             # Caption
@@ -608,6 +634,9 @@ def main() -> int:
             except Exception as exc:
                 errors += 1
                 print(f"API write error for {asset.id}: {exc}", file=sys.stderr)
+
+        if time_stopped:
+            break
 
         # Clear GPU cache if using CUDA
         if device == "cuda" and torch is not None:
