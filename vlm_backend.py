@@ -11,7 +11,7 @@ from typing import Optional
 DEFAULT_CAPTION_PROMPT = """\
 Write one natural sentence describing this photo.
 {people_clause}
-If you see an animal or bird, identify the specific species (e.g. 'Great Blue Heron', not just 'bird').
+If you see an animal or bird, identify the specific species (e.g. the exact bird or animal name, not just 'bird' or 'animal').
 Start the sentence directly — do not begin with 'The image shows', 'A photo of', 'This is', or 'In this image'.\
 """
 
@@ -52,7 +52,10 @@ class OllamaVLM:
 
         if people_names:
             names_str = ", ".join(people_names)
-            people_clause = f"People in this photo: {names_str}. Use their names."
+            people_clause = (
+                f"The people in this photo are: {names_str}. "
+                f"Include their name(s) naturally in your sentence — do NOT output just a name alone."
+            )
         else:
             people_clause = ""
 

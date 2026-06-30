@@ -35,3 +35,8 @@ results.txt
 noun_candidates*.csv
 caption_noun_candidates.csv
 caption_noun_candidates.json
+demo_report*.txt
+files.zip
+removed_takeout_*.csv
+tagger_caption_rescue*.py
+tagger_caption_rescue_report.csv

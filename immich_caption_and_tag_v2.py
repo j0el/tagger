@@ -34,8 +34,10 @@ warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*")
 from PIL import Image, ImageOps, UnidentifiedImageError
 from tqdm import tqdm
 
-from immich_api import AssetInfo, ImmichClient
+from immich_api import AssetInfo, ImmichClient, load_dotenv
 from vlm_backend import DEFAULT_CAPTION_PROMPT, OllamaVLM
+
+load_dotenv()
 
 try:
     import torch
@@ -108,6 +110,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true",
                    help="Print what would change; write nothing to Immich.")
     p.add_argument("--verbose", action="store_true")
+    p.add_argument("--no-caption-tags", action="store_true",
+                   help="Disable caption-noun fallback tagging when zero-shot finds nothing.")
 
     return p.parse_args()
 
@@ -356,6 +360,57 @@ def compute_ai_tags(
     return tags
 
 
+_STOP_WORDS = frozenset(
+    "a an the is are was were be been being have has had do does did "
+    "will would could should may might must shall to of in on at by "
+    "for with as from into and or but not no this that these those "
+    "it he she they we you i me my his her its our your their "
+    "what where when who how there here up out".split()
+)
+
+
+def _simple_stems(text: str) -> set[str]:
+    """Lowercase words from text, with crude suffix removal for matching."""
+    words = set()
+    for w in re.split(r"[^a-z]+", text.lower()):
+        if len(w) < 3 or w in _STOP_WORDS:
+            continue
+        words.add(w)
+        # Strip common suffixes so "hiking" → "hike", "dogs" → "dog"
+        for suffix, min_root in (("ing", 3), ("tion", 4), ("ers", 3), ("ies", 3), ("es", 3), ("s", 3)):
+            if w.endswith(suffix) and len(w) - len(suffix) >= min_root:
+                words.add(w[: -len(suffix)])
+                break
+    return words
+
+
+def caption_based_tags(
+    caption: str,
+    taxonomy: Dict[str, List[str]],
+    max_tags: int = 5,
+) -> List[str]:
+    """Fallback: match taxonomy labels against caption words when zero-shot produced nothing."""
+    if not caption:
+        return []
+    caption_stems = _simple_stems(caption)
+    seen: set[str] = set()
+    tags: List[str] = []
+    for label, raw_tags in taxonomy.items():
+        label_stems = _simple_stems(label)
+        if not label_stems:
+            continue
+        if label_stems.issubset(caption_stems):
+            for raw in raw_tags:
+                t = make_ai_tag(raw)
+                key = t.casefold()
+                if key not in seen:
+                    seen.add(key)
+                    tags.append(t)
+        if len(tags) >= max_tags:
+            break
+    return tags[:max_tags]
+
+
 # ------------------------------------------------------------------ #
 # Main                                                                 #
 # ------------------------------------------------------------------ #
@@ -511,6 +566,10 @@ def main() -> int:
                 except Exception as exc:
                     if args.verbose:
                         print(f"VLM error for {asset.id}: {exc}", file=sys.stderr)
+
+            # Fallback: synthesize tags from caption nouns when zero-shot found nothing
+            if not ai_tags and new_description and not args.no_caption_tags:
+                ai_tags = caption_based_tags(new_description, taxonomy)
 
             if args.verbose or args.dry_run:
                 people_str = f", people={asset.people_names}" if asset.people_names else ""
