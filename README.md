@@ -204,7 +204,49 @@ uv run streamlit run immich_tagger_streamlit_app.py
 
 ## Daily automation
 
-After testing, the simplest automation is a daily run. `run_daily_new_images.sh`
-is an example wrapper (adjust the paths inside it for your machine). A file-watcher
-could be added later, but a daily job is easier to trust because the program is
-restartable and already skips completed work.
+The actual cron-scheduled job is `run_reprocess_all.sh`, not `run_daily_new_images.sh`.
+Each invocation does an incremental pass first (assets created since the last run), then a
+full `--reprocess-all --reprocess-captions` backfill pass. Already-tagged assets are skipped
+via the SQLite model-sig cache, so once the backfill is caught up, repeat runs are cheap.
+`run_daily_new_images.sh` (a single incremental pass) is kept for ad-hoc/manual runs but isn't
+itself on a cron schedule.
+
+### Crontab
+
+```cron
+# Nightly incremental + backfill
+0 5 * * * /bin/bash /home/jberman/Projects/immich-tagger/run_reprocess_all.sh >> /home/jberman/Projects/immich-tagger/logs/reprocess_all.log 2>&1
+
+# Resume immediately after a reboot, instead of waiting for the next 05:00 UTC fire
+@reboot sleep 60 && /bin/bash /home/jberman/Projects/immich-tagger/run_reprocess_all.sh >> /home/jberman/Projects/immich-tagger/logs/reprocess_all.log 2>&1
+```
+
+`run_reprocess_all.sh` takes an flock lock on `/tmp/immich_reprocess_all.lock` before doing
+anything else, so the nightly entry and the `@reboot` entry can never run concurrently —
+whichever fires second just logs "Previous run still in progress" and exits immediately.
+
+### Reboot survival
+
+- Requires `cron` and `docker` both enabled to start at boot (`systemctl is-enabled cron`/`docker`)
+  and every service in the Immich `docker-compose.yml` to have `restart: always` (true by default).
+- The `sleep 60` before invoking the script is a heuristic buffer for Immich's containers to come
+  back up after boot — it is not a real readiness check.
+
+### Gotchas
+
+- **The `@reboot` line lives only in the live crontab, not in this repo.** Run `crontab -l` to see
+  it. If you ever run `crontab -e` and don't preserve existing lines, or rebuild this box, you'll
+  need to re-add both cron lines — nothing in this repo does it for you. (It is captured
+  incidentally by the host's nightly backup job, which exports `crontab -l` to a file outside this
+  repo, but that's a separate system, not something this project manages.)
+- **60 seconds may not be enough** on a slow boot (disk checks, image re-pulls, etc). The API
+  client in `immich_api.py` only retries transient failures 3 times with short exponential backoff
+  (a few seconds total) — if Immich still isn't reachable after that, the run fails outright and
+  won't retry again until the next scheduled cron fire (up to 24h later). If reboots become
+  routine, consider bumping the sleep or adding a real wait-for-Immich retry loop.
+- **The full backfill is slow.** Captioning currently runs on CPU only, and observed throughput is
+  roughly 600–700s per 8-image batch. A full unattended pass over a ~18k-asset library is on the
+  order of days of continuous runtime, not hours — that's expected, not a hang.
+- **`--stop-at` was intentionally removed** from the reprocess-all step in `run_reprocess_all.sh`
+  so it runs continuously instead of stopping every morning. If you want the old overnight-only
+  behavior back, re-add `--stop-at HH:MM` to that step.
