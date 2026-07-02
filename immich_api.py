@@ -184,6 +184,11 @@ class ImmichClient:
     def find_all_assets(self, page_size: int = 100) -> Iterator[AssetInfo]:
         return self.find_new_assets(since=None, page_size=page_size)
 
+    def get_asset_by_id(self, asset_id: str) -> AssetInfo:
+        data = self._request("GET", f"/api/assets/{asset_id}")
+        assert isinstance(data, dict)
+        return self._parse_asset(data)
+
     @staticmethod
     def _parse_asset(item: dict) -> AssetInfo:
         try:

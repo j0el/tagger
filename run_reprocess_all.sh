@@ -1,11 +1,14 @@
 #!/bin/bash
-# Nightly job while the reprocess-all backfill is in progress.
-# Runs 10 PM – 7 AM Pacific via cron (system clock is UTC, so cron/--stop-at
-# times below are the Pacific times + 7h):
+# Backfill job — runs continuously (no time-of-day cutoff) until the
+# reprocess-all backfill has covered every asset in the library.
 #   1. Daily incremental run first (new photos added today)
-#   2. Reprocess-all backfill for the rest of the night (checkpointed via SQLite cache)
+#   2. Reprocess-all backfill, uninterrupted, checkpointed via SQLite cache
 #
-# Already-processed assets are skipped automatically each night.
+# Still fires nightly via cron (0 5 * * *), but a flock guard makes that safe:
+# if a previous run is still going (which is expected while the no-cutoff
+# backfill is in progress), the new cron invocation just exits instead of
+# starting a second overlapping process.
+#
 # When the backfill completes, restore the original cron:
 #   0 6 * * * /bin/bash /home/jberman/Projects/immich-tagger/run_daily_new_images.sh ...  (= 11 PM Pacific)
 #
@@ -16,6 +19,12 @@ set -euo pipefail
 
 cd /home/jberman/Projects/immich-tagger
 
+exec 200>/tmp/immich_reprocess_all.lock
+if ! flock -n 200; then
+  echo "$(date) Previous run still in progress — skipping this invocation." >> logs/reprocess_all.log
+  exit 0
+fi
+
 export PATH="/home/jberman/.local/bin:/usr/local/bin:/usr/bin:/bin"
 source "$(dirname "$0")/.env"
 export IMMICH_URL="${IMMICH_URL/http:\/\/https:\/\//https://}"
@@ -25,7 +34,7 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/reprocess_all.log"
 
 echo "" | tee -a "$LOG"
-echo "===== $(date) Starting nightly run =====" | tee -a "$LOG"
+echo "===== $(date) Starting run =====" | tee -a "$LOG"
 
 # ── Step 1: daily incremental (new photos since last run) ──────────────────
 echo "--- $(date) Daily incremental ---" | tee -a "$LOG"
@@ -36,8 +45,8 @@ uv run python immich_caption_and_tag_v2.py \
   --vlm-model qwen2.5vl:7b \
   2>&1 | tee -a "$LOG"
 
-# ── Step 2: reprocess-all backfill (runs until 7 AM Pacific, resumes tomorrow) ─
-echo "--- $(date) Reprocess-all backfill (stop-at 14:00 UTC = 7 AM Pacific) ---" | tee -a "$LOG"
+# ── Step 2: reprocess-all backfill (runs uninterrupted until fully caught up) ─
+echo "--- $(date) Reprocess-all backfill (no time cutoff) ---" | tee -a "$LOG"
 uv run python immich_caption_and_tag_v2.py \
   --labels-file labels_curated_hierarchical.txt \
   --taxonomy-map labels_taxonomy_map.csv \
@@ -45,7 +54,6 @@ uv run python immich_caption_and_tag_v2.py \
   --vlm-model qwen2.5vl:7b \
   --reprocess-all \
   --reprocess-captions \
-  --stop-at 14:00 \
   2>&1 | tee -a "$LOG"
 
-echo "===== $(date) Nightly run finished =====" | tee -a "$LOG"
+echo "===== $(date) Run finished =====" | tee -a "$LOG"

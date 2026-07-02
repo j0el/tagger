@@ -75,6 +75,8 @@ def parse_args() -> argparse.Namespace:
                    help="Process every asset in the library (ignores last-run date; respects model-sig cache).")
     g.add_argument("--since", default=None,
                    help="Only process assets created after this ISO date (overrides saved last-run date).")
+    g.add_argument("--asset-id", action="append", default=None,
+                   help="Process only this specific asset ID (repeatable). For manual testing/debugging.")
     p.add_argument("--reprocess-captions", action="store_true",
                    help="Re-generate captions even when the asset already has a description.")
     p.add_argument("--force", action="store_true",
@@ -486,7 +488,10 @@ def main() -> int:
     init_db(conn)
 
     # --- Asset list ---
-    if args.reprocess_all:
+    if args.asset_id:
+        print(f"Mode: specific asset ID(s): {args.asset_id}", file=sys.stderr)
+        assets = [client.get_asset_by_id(aid) for aid in args.asset_id]
+    elif args.reprocess_all:
         since: Optional[datetime] = None
         print("Mode: reprocess ALL assets", file=sys.stderr)
     elif args.since:
@@ -499,15 +504,16 @@ def main() -> int:
         else:
             print("Mode: no last-run date found — processing ALL assets (first run)", file=sys.stderr)
 
-    print("Fetching asset list from Immich...", file=sys.stderr)
-    assets = list(tqdm(client.find_new_assets(since=since), desc="Fetching", unit="asset"))
+    if not args.asset_id:
+        print("Fetching asset list from Immich...", file=sys.stderr)
+        assets = list(tqdm(client.find_new_assets(since=since), desc="Fetching", unit="asset"))
 
     if args.limit > 0:
         assets = assets[: args.limit]
 
     if not assets:
         print("No assets to process.", file=sys.stderr)
-        if not args.reprocess_all:
+        if not args.reprocess_all and not args.asset_id:
             set_last_run_date(conn, datetime.now(timezone.utc))
         conn.close()
         return 0
@@ -646,7 +652,7 @@ def main() -> int:
                 pass
 
     # Update last-run date for future incremental runs
-    if not args.reprocess_all and not args.dry_run:
+    if not args.reprocess_all and not args.asset_id and not args.dry_run:
         set_last_run_date(conn, datetime.now(timezone.utc))
 
     conn.close()
