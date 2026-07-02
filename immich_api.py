@@ -177,7 +177,7 @@ class ImmichClient:
             block = resp.get("assets", {})
             for item in block.get("items", []):
                 yield self._parse_asset(item)
-            if not block.get("hasNextPage", False):
+            if block.get("nextPage") is None:
                 break
             page += 1
 
