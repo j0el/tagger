@@ -73,6 +73,10 @@ class OllamaVLM:
                 }
             ],
             "stream": False,
+            # Keep the model resident: the default 5m keep_alive made Ollama
+            # unload + reload the ~5GB model whenever classification between
+            # caption batches took longer than 5 minutes.
+            "keep_alive": -1,
             "options": {"temperature": self.temperature},
         }
 

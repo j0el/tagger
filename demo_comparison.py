@@ -31,6 +31,7 @@ from immich_caption_and_tag_v2 import (
     caption_based_tags,
     choose_device,
     compute_ai_tags,
+    filter_preds,
     normalize_image_for_model,
     read_labels,
     read_taxonomy_map,
@@ -164,7 +165,7 @@ def main() -> int:
             vlm = None
 
     print("Loading SigLIP model...", file=sys.stderr)
-    runner = ZeroShotRunner(device, args.zero_shot_model, verbose=False)
+    runner = ZeroShotRunner(device, args.zero_shot_model, labels, verbose=False)
 
     # Asset pool
     print(f"Fetching asset pool (up to {args.pool_size})...", file=sys.stderr)
@@ -222,10 +223,11 @@ def main() -> int:
 
         # SigLIP classification
         try:
-            preds = runner.classify_batch([img], labels, 6, 0.32, 0.70)[0]
+            pairs = runner.scores_batch([img])[0]
+            preds = filter_preds(pairs, 6, 0.32, 0.70)
             if not preds:
                 # fallback thresholds
-                preds = runner.classify_batch([img], labels, 3, 0.20, 0.50)[0]
+                preds = filter_preds(pairs, 3, 0.20, 0.50)
             new_ai_tags = compute_ai_tags(preds, taxonomy, 6)
         except Exception as exc:
             print(f"  Error: classification failed: {exc}", file=sys.stderr)

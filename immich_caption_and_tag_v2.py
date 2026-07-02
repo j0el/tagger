@@ -20,8 +20,10 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -41,10 +43,11 @@ load_dotenv()
 
 try:
     import torch
-    from transformers import pipeline as hf_pipeline
+    from transformers import AutoModel, AutoProcessor
 except Exception:
     torch = None
-    hf_pipeline = None
+    AutoModel = None
+    AutoProcessor = None
 
 # ------------------------------------------------------------------ #
 # Constants                                                            #
@@ -224,41 +227,68 @@ def normalize_image_for_model(img: Image.Image, max_side: int) -> Image.Image:
 
 
 class ZeroShotRunner:
-    def __init__(self, device: str, model_name: str, verbose: bool = False):
-        if hf_pipeline is None:
+    """SigLIP zero-shot scorer with text embeddings precomputed once.
+
+    The candidate labels never change during a run, so their embeddings are
+    computed a single time here; each batch then only encodes the images.
+    (The HF zero-shot pipeline this replaces re-encoded all labels through the
+    text tower on every call.) Scoring matches the pipeline exactly:
+    sigmoid(img @ txt.T * logit_scale.exp() + logit_bias) with the pipeline's
+    default "This is a photo of {}." template and max_length padding.
+    """
+
+    def __init__(self, device: str, model_name: str, labels: Sequence[str], verbose: bool = False):
+        if torch is None or AutoModel is None:
             raise RuntimeError("transformers not available — install with: uv add transformers torch")
         if verbose:
             print(f"Loading zero-shot model: {model_name} on {device}", file=sys.stderr)
-        kwargs: dict = {"model": model_name, "use_fast": True}
-        if device == "cuda":
-            kwargs["device"] = 0
-        else:
-            kwargs["device"] = "cpu"
-        self._pipe = hf_pipeline("zero-shot-image-classification", **kwargs)
+        self._device = device
+        self._model = AutoModel.from_pretrained(model_name).to(device).eval()
+        self._processor = AutoProcessor.from_pretrained(model_name, use_fast=True)
+        self._labels = [normalize_tag(str(l)) for l in labels]
+        texts = [f"This is a photo of {l}." for l in labels]
+        text_inputs = self._processor.tokenizer(
+            texts, padding="max_length", truncation=True, return_tensors="pt"
+        ).to(device)
+        with torch.inference_mode():
+            text_embeds = self._as_tensor(self._model.get_text_features(**text_inputs))
+            self._text_embeds = torch.nn.functional.normalize(text_embeds, dim=-1)
+            self._logit_scale = self._model.logit_scale.exp()
+            self._logit_bias = self._model.logit_bias
 
-    def classify_batch(
-        self,
-        images: Sequence[Image.Image],
-        labels: Sequence[str],
-        top_k: int,
-        threshold: float,
-        relative_threshold: float,
-    ) -> List[List[Tuple[str, float]]]:
-        outputs = self._pipe(list(images), candidate_labels=list(labels))
-        # When a single image is passed the pipeline may unwrap the list.
-        if images and isinstance(outputs, list) and outputs and isinstance(outputs[0], dict):
-            outputs = [outputs]
+    @staticmethod
+    def _as_tensor(out):
+        """get_*_features returns a plain tensor in older transformers, a model
+        output object with pooler_output in newer ones."""
+        return out if torch.is_tensor(out) else out.pooler_output
+
+    def scores_batch(self, images: Sequence[Image.Image]) -> List[List[Tuple[str, float]]]:
+        """Return, per image, ALL (label, score) pairs sorted by score descending."""
+        inputs = self._processor(images=list(images), return_tensors="pt").to(self._device)
+        with torch.inference_mode():
+            image_embeds = self._as_tensor(self._model.get_image_features(**inputs))
+            image_embeds = torch.nn.functional.normalize(image_embeds, dim=-1)
+            logits = image_embeds @ self._text_embeds.T * self._logit_scale + self._logit_bias
+            probs = torch.sigmoid(logits).cpu()
         results: List[List[Tuple[str, float]]] = []
-        for one in outputs:
-            pairs = [(normalize_tag(str(item["label"])), float(item["score"])) for item in one]
-            pairs.sort(key=lambda x: x[1], reverse=True)
-            best = pairs[0][1] if pairs else 0.0
-            filtered = [
-                (lab, sc) for lab, sc in pairs
-                if sc >= threshold and sc >= best * relative_threshold
-            ][:top_k]
-            results.append(filtered)
+        for row in probs:
+            pairs = sorted(zip(self._labels, row.tolist()), key=lambda x: x[1], reverse=True)
+            results.append(pairs)
         return results
+
+
+def filter_preds(
+    pairs: List[Tuple[str, float]],
+    top_k: int,
+    threshold: float,
+    relative_threshold: float,
+) -> List[Tuple[str, float]]:
+    """Apply score thresholds to already-sorted (label, score) pairs — no inference."""
+    best = pairs[0][1] if pairs else 0.0
+    return [
+        (lab, sc) for lab, sc in pairs
+        if sc >= threshold and sc >= best * relative_threshold
+    ][:top_k]
 
 
 # ------------------------------------------------------------------ #
@@ -480,11 +510,13 @@ def main() -> int:
 
     # --- Zero-shot model ---
     print("Loading zero-shot classification model...", file=sys.stderr)
-    runner = ZeroShotRunner(device, args.zero_shot_model, verbose=args.verbose)
+    runner = ZeroShotRunner(device, args.zero_shot_model, labels, verbose=args.verbose)
 
     # --- SQLite cache ---
     db_path = Path(args.db_path).expanduser().resolve()
-    conn = sqlite3.connect(db_path)
+    # check_same_thread: the caption/write worker thread commits cache entries;
+    # all access is serialized through db_lock below.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     init_db(conn)
 
     # --- Asset list ---
@@ -526,63 +558,18 @@ def main() -> int:
     caption_count = 0
 
     batch_size = args.batch_size
+    db_lock = threading.Lock()
 
-    time_stopped = False
-    for batch_start in tqdm(range(0, len(assets), batch_size), desc="Batches"):
-        if stop_dt and datetime.now() >= stop_dt:
-            print(f"\nTime window ended at {args.stop_at}. Stopping — resume tomorrow night.", file=sys.stderr)
-            time_stopped = True
-            break
-
-        batch = assets[batch_start : batch_start + batch_size]
-
-        # Filter cached
-        to_process: List[Tuple[AssetInfo, Image.Image, bytes]] = []
-        for asset in batch:
-            if not args.force and is_cached(conn, asset.id, model_sig):
-                skipped += 1
-                continue
-            try:
-                thumb_bytes = client.get_thumbnail(asset.id)
-                img = Image.open(io.BytesIO(thumb_bytes))
-                img = normalize_image_for_model(img, args.max_side)
-                to_process.append((asset, img, thumb_bytes))
-            except Exception as exc:
-                errors += 1
-                if args.verbose:
-                    print(f"Thumbnail error {asset.id} ({asset.file_name}): {exc}", file=sys.stderr)
-
-        if not to_process:
-            continue
-
-        # SigLIP classification
-        images = [img for _, img, _ in to_process]
-        try:
-            primary_preds = runner.classify_batch(
-                images, labels, args.top_k, args.threshold, args.relative_threshold
-            )
-        except Exception as exc:
-            errors += len(to_process)
-            print(f"Classification batch failed: {exc}", file=sys.stderr)
-            continue
-
-        # Fallback thresholds for images that matched nothing
-        fallback_indices = [i for i, p in enumerate(primary_preds) if not p]
-        if fallback_indices:
-            fallback_preds = runner.classify_batch(
-                [images[i] for i in fallback_indices],
-                labels,
-                args.fallback_top_k,
-                args.fallback_threshold,
-                args.fallback_relative_threshold,
-            )
-            for idx, preds in zip(fallback_indices, fallback_preds):
-                primary_preds[idx] = preds
-
-        for (asset, _img, thumb_bytes), preds in zip(to_process, primary_preds):
+    def caption_and_write(
+        to_process: List[Tuple[AssetInfo, Image.Image, bytes]],
+        preds_list: List[List[Tuple[str, float]]],
+    ) -> Tuple[int, int, int]:
+        """Caption + write one classified batch. Runs on the worker thread so the
+        VLM (iGPU) handles batch N while the main thread classifies batch N+1 (CPU).
+        Returns (written, captions, errors) for the batch."""
+        n_written = n_captions = n_errors = 0
+        for (asset, _img, thumb_bytes), preds in zip(to_process, preds_list):
             if stop_dt and datetime.now() >= stop_dt:
-                print(f"\nTime window ended at {args.stop_at}. Stopping — resume tomorrow night.", file=sys.stderr)
-                time_stopped = True
                 break
 
             ai_tags = compute_ai_tags(preds, taxonomy, args.top_k)
@@ -594,7 +581,7 @@ def main() -> int:
                     caption = vlm.caption(thumb_bytes, asset.people_names, caption_prompt)
                     if caption:
                         new_description = caption
-                        caption_count += 1
+                        n_captions += 1
                 except Exception as exc:
                     if args.verbose:
                         print(f"VLM error for {asset.id}: {exc}", file=sys.stderr)
@@ -613,7 +600,7 @@ def main() -> int:
                     print(f"  scores: {[(l, round(s, 3)) for l, s in preds[:5]]}")
 
             if args.dry_run:
-                written += 1
+                n_written += 1
                 continue
 
             try:
@@ -632,17 +619,75 @@ def main() -> int:
                 if new_description and new_description != asset.description:
                     client.update_description(asset.id, new_description)
 
-                put_cache(conn, asset.id, model_sig, {
-                    "tags": ai_tags,
-                    "description": new_description,
-                })
-                written += 1
+                with db_lock:
+                    put_cache(conn, asset.id, model_sig, {
+                        "tags": ai_tags,
+                        "description": new_description,
+                    })
+                n_written += 1
+            except Exception as exc:
+                n_errors += 1
+                print(f"API write error for {asset.id}: {exc}", file=sys.stderr)
+        return n_written, n_captions, n_errors
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    pending = None  # at most one caption/write batch in flight
+
+    for batch_start in tqdm(range(0, len(assets), batch_size), desc="Batches"):
+        if stop_dt and datetime.now() >= stop_dt:
+            print(f"\nTime window ended at {args.stop_at}. Stopping — resume tomorrow night.", file=sys.stderr)
+            break
+
+        batch = assets[batch_start : batch_start + batch_size]
+
+        # Filter cached
+        to_process: List[Tuple[AssetInfo, Image.Image, bytes]] = []
+        for asset in batch:
+            with db_lock:
+                cached = not args.force and is_cached(conn, asset.id, model_sig)
+            if cached:
+                skipped += 1
+                continue
+            try:
+                thumb_bytes = client.get_thumbnail(asset.id)
+                img = Image.open(io.BytesIO(thumb_bytes))
+                img = normalize_image_for_model(img, args.max_side)
+                to_process.append((asset, img, thumb_bytes))
             except Exception as exc:
                 errors += 1
-                print(f"API write error for {asset.id}: {exc}", file=sys.stderr)
+                if args.verbose:
+                    print(f"Thumbnail error {asset.id} ({asset.file_name}): {exc}", file=sys.stderr)
 
-        if time_stopped:
-            break
+        if not to_process:
+            continue
+
+        # SigLIP classification (CPU): raw scores once, both threshold passes on
+        # the same scores — the old fallback re-ran inference for empty results.
+        images = [img for _, img, _ in to_process]
+        try:
+            raw_scores = runner.scores_batch(images)
+        except Exception as exc:
+            errors += len(to_process)
+            print(f"Classification batch failed: {exc}", file=sys.stderr)
+            continue
+
+        preds_list: List[List[Tuple[str, float]]] = []
+        for pairs in raw_scores:
+            preds = filter_preds(pairs, args.top_k, args.threshold, args.relative_threshold)
+            if not preds:
+                preds = filter_preds(
+                    pairs, args.fallback_top_k, args.fallback_threshold,
+                    args.fallback_relative_threshold,
+                )
+            preds_list.append(preds)
+
+        # Hand off caption+write, overlapping it with the next batch's classification
+        if pending is not None:
+            w, c, e = pending.result()
+            written += w
+            caption_count += c
+            errors += e
+        pending = executor.submit(caption_and_write, to_process, preds_list)
 
         # Clear GPU cache if using CUDA
         if device == "cuda" and torch is not None:
@@ -650,6 +695,13 @@ def main() -> int:
                 torch.cuda.empty_cache()
             except Exception:
                 pass
+
+    if pending is not None:
+        w, c, e = pending.result()
+        written += w
+        caption_count += c
+        errors += e
+    executor.shutdown(wait=True)
 
     # Update last-run date for future incremental runs
     if not args.reprocess_all and not args.asset_id and not args.dry_run:
