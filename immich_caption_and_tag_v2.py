@@ -244,7 +244,7 @@ class ZeroShotRunner:
             print(f"Loading zero-shot model: {model_name} on {device}", file=sys.stderr)
         self._device = device
         self._model = AutoModel.from_pretrained(model_name).to(device).eval()
-        self._processor = AutoProcessor.from_pretrained(model_name, use_fast=True)
+        self._processor = AutoProcessor.from_pretrained(model_name, backend="torchvision")
         self._labels = [normalize_tag(str(l)) for l in labels]
         texts = [f"This is a photo of {l}." for l in labels]
         text_inputs = self._processor.tokenizer(
