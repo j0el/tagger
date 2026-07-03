@@ -10,20 +10,17 @@ from __future__ import annotations
 
 import argparse
 import io
-import json
 import os
 import random
-import re
 import sys
 import time
-import urllib.request
 from pathlib import Path
 from typing import Optional
 
 from PIL import Image
 
 from immich_api import ImmichClient, load_dotenv
-from vlm_backend import DEFAULT_CAPTION_PROMPT, OllamaVLM
+from vlm_backend import OllamaVLM
 
 load_dotenv()
 from immich_caption_and_tag_v2 import (
@@ -143,7 +140,6 @@ def main() -> int:
     if not base_url or not api_key:
         print("ERROR: IMMICH_URL and IMMICH_API_KEY must be set.", file=sys.stderr)
         return 1
-    base_url = re.sub(r"^https?://https?://", "https://", base_url)
 
     labels = read_labels(Path(args.labels_file))
     taxonomy = read_taxonomy_map(Path(args.taxonomy_map))

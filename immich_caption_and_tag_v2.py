@@ -22,18 +22,12 @@ import sqlite3
 import sys
 import threading
 import time
-import warnings
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
-warnings.filterwarnings("ignore", message="Using a slow image processor")
-warnings.filterwarnings("ignore", message=".*AutoModelForVision2Seq.*deprecated.*")
-warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*")
-
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps
 from tqdm import tqdm
 
 from immich_api import AssetInfo, ImmichClient, load_dotenv
@@ -461,9 +455,6 @@ def main() -> int:
     if not base_url or not api_key:
         print("ERROR: IMMICH_URL and IMMICH_API_KEY must be set in the environment.", file=sys.stderr)
         return 1
-
-    # Fix accidental double-scheme from old .env
-    base_url = re.sub(r"^https?://https?://", "https://", base_url)
 
     # --- Time window ---
     stop_dt: Optional[datetime] = None

@@ -27,7 +27,7 @@ fi
 
 export PATH="/home/jberman/.local/bin:/usr/local/bin:/usr/bin:/bin"
 source "$(dirname "$0")/.env"
-export IMMICH_URL="${IMMICH_URL/http:\/\/https:\/\//https://}"
+export IMMICH_URL IMMICH_API_KEY
 
 LOG_DIR="logs"
 mkdir -p "$LOG_DIR"

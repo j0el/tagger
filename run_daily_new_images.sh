@@ -7,9 +7,7 @@ export PATH="/home/jberman/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
 # Load Immich credentials into environment for the Python script
 source "$(dirname "$0")/.env"
-
-# Fix accidental double-scheme written in .env
-export IMMICH_URL="${IMMICH_URL/http:\/\/https:\/\//https://}"
+export IMMICH_URL IMMICH_API_KEY
 
 echo "===== $(date) Starting daily Immich caption/tag run ====="
 

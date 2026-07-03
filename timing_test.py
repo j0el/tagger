@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import io
 import json
+import os
 import random
 import sys
 import time
@@ -15,11 +15,8 @@ from vlm_backend import OllamaVLM, DEFAULT_CAPTION_PROMPT
 
 load_dotenv()
 
-import os
 base_url = os.environ.get("IMMICH_URL", "").strip()
 api_key  = os.environ.get("IMMICH_API_KEY", "").strip()
-import re
-base_url = re.sub(r"^https?://https?://", "https://", base_url)
 
 def parse_args():
     p = argparse.ArgumentParser()
