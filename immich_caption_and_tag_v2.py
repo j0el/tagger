@@ -17,6 +17,7 @@ import hashlib
 import io
 import json
 import os
+import queue
 import re
 import sqlite3
 import sys
@@ -91,6 +92,10 @@ def parse_args() -> argparse.Namespace:
                    help="Ollama base URL.")
     p.add_argument("--vlm-timeout", type=int, default=120,
                    help="Seconds to wait for a VLM response per image.")
+    p.add_argument("--vlm-workers", type=int, default=2,
+                   help="Concurrent VLM caption requests. Should match the Ollama "
+                        "server's OLLAMA_NUM_PARALLEL; extra requests just queue "
+                        "inside Ollama. Set 1 to restore serial captioning.")
     p.add_argument("--caption-prompt", default=None,
                    help="Caption prompt template. Use {people_clause} for name injection. "
                         "Defaults to the built-in template in vlm_backend.py.")
@@ -555,31 +560,44 @@ def main() -> int:
     batch_size = args.batch_size
     db_lock = threading.Lock()
 
-    def caption_and_write(
-        to_process: List[Tuple[AssetInfo, Image.Image, bytes]],
-        preds_list: List[List[Tuple[str, float]]],
-    ) -> Tuple[int, int, int]:
-        """Caption + write one classified batch. Runs on the worker thread so the
-        VLM (iGPU) handles batch N while the main thread classifies batch N+1 (CPU).
-        Returns (written, captions, errors) for the batch."""
-        n_written = n_captions = n_errors = 0
-        for (asset, _img, vlm_bytes), preds in zip(to_process, preds_list):
-            if stop_dt and datetime.now() >= stop_dt:
+    # --- Three-stage pipeline ---------------------------------------- #
+    # main thread: fetch (pooled) + SigLIP classify (CPU)
+    #   -> caption_q -> N caption workers (only talk to Ollama, keep iGPU fed)
+    #   -> write_q   -> 1 writer thread (Immich API + sqlite; off the GPU path)
+    # Queues are bounded so the main thread runs just far enough ahead to
+    # keep the VLM busy without holding the whole library in memory.
+    vlm_workers = max(1, args.vlm_workers)
+    caption_q: queue.Queue = queue.Queue(maxsize=max(8, 4 * vlm_workers))
+    write_q: queue.Queue = queue.Queue(maxsize=64)
+    # written/captions/write-errors are owned by the writer thread alone;
+    # main-thread errors (thumbnails, classification) stay in `errors`.
+    writer_totals = {"written": 0, "captions": 0, "errors": 0}
+
+    def caption_worker() -> None:
+        while True:
+            item = caption_q.get()
+            if item is None:
                 break
-
-            ai_tags = compute_ai_tags(preds, taxonomy, args.top_k)
-
-            # Caption
+            asset, vlm_bytes, ai_tags, preds = item
             new_description = asset.description
+            captioned = False
             if vlm and (not asset.description or args.reprocess_captions):
                 try:
                     caption = vlm.caption(vlm_bytes, asset.people_names, caption_prompt)
                     if caption:
                         new_description = caption
-                        n_captions += 1
+                        captioned = True
                 except Exception as exc:
                     if args.verbose:
                         print(f"VLM error for {asset.id}: {exc}", file=sys.stderr)
+            write_q.put((asset, ai_tags, preds, new_description, captioned))
+
+    def writer() -> None:
+        while True:
+            item = write_q.get()
+            if item is None:
+                break
+            asset, ai_tags, preds, new_description, captioned = item
 
             # Fallback: synthesize tags from caption nouns when zero-shot found nothing
             if not ai_tags and new_description and not args.no_caption_tags:
@@ -595,7 +613,8 @@ def main() -> int:
                     print(f"  scores: {[(l, round(s, 3)) for l, s in preds[:5]]}")
 
             if args.dry_run:
-                n_written += 1
+                writer_totals["written"] += 1
+                writer_totals["captions"] += int(captioned)
                 continue
 
             try:
@@ -619,43 +638,60 @@ def main() -> int:
                         "tags": ai_tags,
                         "description": new_description,
                     })
-                n_written += 1
+                writer_totals["written"] += 1
+                writer_totals["captions"] += int(captioned)
             except Exception as exc:
-                n_errors += 1
+                writer_totals["errors"] += 1
                 print(f"API write error for {asset.id}: {exc}", file=sys.stderr)
-        return n_written, n_captions, n_errors
 
-    executor = ThreadPoolExecutor(max_workers=1)
-    pending = None  # at most one caption/write batch in flight
+    def fetch_one(asset: AssetInfo) -> Optional[Tuple[AssetInfo, Image.Image, bytes]]:
+        try:
+            thumb_bytes = client.get_thumbnail(asset.id)
+            orig = Image.open(io.BytesIO(thumb_bytes))
+            img = normalize_image_for_model(orig, args.max_side)
+            vlm_img = normalize_image_for_model(orig, args.vlm_max_side)
+            vlm_buf = io.BytesIO()
+            vlm_img.save(vlm_buf, format="JPEG", quality=90)
+            return (asset, img, vlm_buf.getvalue())
+        except Exception as exc:
+            if args.verbose:
+                print(f"Thumbnail error {asset.id} ({asset.file_name}): {exc}", file=sys.stderr)
+            return None
 
+    caption_threads = [
+        threading.Thread(target=caption_worker, name=f"caption-{i}", daemon=True)
+        for i in range(vlm_workers)
+    ]
+    writer_thread = threading.Thread(target=writer, name="writer", daemon=True)
+    for t in caption_threads:
+        t.start()
+    writer_thread.start()
+    fetch_pool = ThreadPoolExecutor(max_workers=4)
+
+    stopped_early = False
     for batch_start in tqdm(range(0, len(assets), batch_size), desc="Batches"):
         if stop_dt and datetime.now() >= stop_dt:
             print(f"\nTime window ended at {args.stop_at}. Stopping — resume tomorrow night.", file=sys.stderr)
+            stopped_early = True
             break
 
         batch = assets[batch_start : batch_start + batch_size]
 
         # Filter cached
-        to_process: List[Tuple[AssetInfo, Image.Image, bytes]] = []
+        uncached: List[AssetInfo] = []
         for asset in batch:
             with db_lock:
                 cached = not args.force and is_cached(conn, asset.id, model_sig)
             if cached:
                 skipped += 1
-                continue
-            try:
-                thumb_bytes = client.get_thumbnail(asset.id)
-                orig = Image.open(io.BytesIO(thumb_bytes))
-                img = normalize_image_for_model(orig, args.max_side)
-                vlm_img = normalize_image_for_model(orig, args.vlm_max_side)
-                vlm_buf = io.BytesIO()
-                vlm_img.save(vlm_buf, format="JPEG", quality=90)
-                to_process.append((asset, img, vlm_buf.getvalue()))
-            except Exception as exc:
-                errors += 1
-                if args.verbose:
-                    print(f"Thumbnail error {asset.id} ({asset.file_name}): {exc}", file=sys.stderr)
+            else:
+                uncached.append(asset)
+        if not uncached:
+            continue
 
+        fetched = list(fetch_pool.map(fetch_one, uncached))
+        errors += sum(1 for f in fetched if f is None)
+        to_process = [f for f in fetched if f is not None]
         if not to_process:
             continue
 
@@ -669,23 +705,16 @@ def main() -> int:
             print(f"Classification batch failed: {exc}", file=sys.stderr)
             continue
 
-        preds_list: List[List[Tuple[str, float]]] = []
-        for pairs in raw_scores:
+        for (asset, _img, vlm_bytes), pairs in zip(to_process, raw_scores):
             preds = filter_preds(pairs, args.top_k, args.threshold, args.relative_threshold)
             if not preds:
                 preds = filter_preds(
                     pairs, args.fallback_top_k, args.fallback_threshold,
                     args.fallback_relative_threshold,
                 )
-            preds_list.append(preds)
-
-        # Hand off caption+write, overlapping it with the next batch's classification
-        if pending is not None:
-            w, c, e = pending.result()
-            written += w
-            caption_count += c
-            errors += e
-        pending = executor.submit(caption_and_write, to_process, preds_list)
+            ai_tags = compute_ai_tags(preds, taxonomy, args.top_k)
+            # Blocks when the queue is full — backpressure on the main thread
+            caption_q.put((asset, vlm_bytes, ai_tags, preds))
 
         # Clear GPU cache if using CUDA
         if device == "cuda" and torch is not None:
@@ -694,12 +723,26 @@ def main() -> int:
             except Exception:
                 pass
 
-    if pending is not None:
-        w, c, e = pending.result()
-        written += w
-        caption_count += c
-        errors += e
-    executor.shutdown(wait=True)
+    if stopped_early:
+        # Drop anything not yet captioning — uncached assets are simply
+        # reprocessed on the next run (same as the old mid-batch break).
+        try:
+            while True:
+                caption_q.get_nowait()
+        except queue.Empty:
+            pass
+
+    for _ in caption_threads:
+        caption_q.put(None)
+    for t in caption_threads:
+        t.join()
+    write_q.put(None)
+    writer_thread.join()
+    fetch_pool.shutdown(wait=True)
+
+    written += writer_totals["written"]
+    caption_count += writer_totals["captions"]
+    errors += writer_totals["errors"]
 
     # Update last-run date for future incremental runs
     if not args.reprocess_all and not args.asset_id and not args.dry_run:
