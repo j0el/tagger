@@ -39,6 +39,7 @@ docstring at the top of the file describing its role.
 | `remove_sidecar_tags_v2.py` | Removes unwanted Google-Takeout / immich-go tags from sidecars. Dry-run by default. |
 | `immich_tagger_streamlit_app.py` | Local browser GUI that wraps the tools above. See `README_STREAMLIT_GUI.md`. |
 | `run_daily_new_images.sh` | Example daily-automation script for a full-library run. |
+| `health_snapshot.py` | One-line hourly system snapshot: temps, memory/swap, PSI pressure, GPU busy, and images tagged (total + last hour). Cron-run at :05, appends to `logs/health.log`. |
 
 ### Setup and docs
 

@@ -104,6 +104,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fallback-relative-threshold", type=float, default=0.50)
     p.add_argument("--fallback-top-k", type=int, default=3)
     p.add_argument("--max-side", type=int, default=768)
+    p.add_argument("--vlm-max-side", type=int, default=1024,
+                   help="Long-side cap (px) for images sent to the VLM. qwen2.5-vl's "
+                        "image-token count grows linearly with pixels, so full-size "
+                        "1440px+ previews caption 3-4x slower than a ~1024px copy.")
 
     # --- Output ---
     p.add_argument("--dry-run", action="store_true",
@@ -559,7 +563,7 @@ def main() -> int:
         VLM (iGPU) handles batch N while the main thread classifies batch N+1 (CPU).
         Returns (written, captions, errors) for the batch."""
         n_written = n_captions = n_errors = 0
-        for (asset, _img, thumb_bytes), preds in zip(to_process, preds_list):
+        for (asset, _img, vlm_bytes), preds in zip(to_process, preds_list):
             if stop_dt and datetime.now() >= stop_dt:
                 break
 
@@ -569,7 +573,7 @@ def main() -> int:
             new_description = asset.description
             if vlm and (not asset.description or args.reprocess_captions):
                 try:
-                    caption = vlm.caption(thumb_bytes, asset.people_names, caption_prompt)
+                    caption = vlm.caption(vlm_bytes, asset.people_names, caption_prompt)
                     if caption:
                         new_description = caption
                         n_captions += 1
@@ -641,9 +645,12 @@ def main() -> int:
                 continue
             try:
                 thumb_bytes = client.get_thumbnail(asset.id)
-                img = Image.open(io.BytesIO(thumb_bytes))
-                img = normalize_image_for_model(img, args.max_side)
-                to_process.append((asset, img, thumb_bytes))
+                orig = Image.open(io.BytesIO(thumb_bytes))
+                img = normalize_image_for_model(orig, args.max_side)
+                vlm_img = normalize_image_for_model(orig, args.vlm_max_side)
+                vlm_buf = io.BytesIO()
+                vlm_img.save(vlm_buf, format="JPEG", quality=90)
+                to_process.append((asset, img, vlm_buf.getvalue()))
             except Exception as exc:
                 errors += 1
                 if args.verbose:

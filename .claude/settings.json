@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(systemctl cat *)",
+      "Bash(systemctl list-units *)",
+      "Bash(systemctl list-timers *)",
+      "Bash(systemctl is-active *)",
+      "Bash(systemctl status *)",
+      "Bash(journalctl *)",
+      "Bash(ollama list)"
+    ]
+  }
+}
