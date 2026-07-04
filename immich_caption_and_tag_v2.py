@@ -89,7 +89,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--vlm-model", default=DEFAULT_VLM_MODEL,
                    help="Ollama model name for captioning (default: qwen2.5vl:7b).")
     p.add_argument("--vlm-url", default="http://localhost:11434",
-                   help="Ollama base URL.")
+                   help="VLM server base URL.")
+    p.add_argument("--vlm-api", choices=["ollama", "openai"], default="ollama",
+                   help="VLM protocol: 'ollama' (/api/chat) or 'openai' "
+                        "(/v1/chat/completions, e.g. the llama-vlm service on :8082).")
     p.add_argument("--vlm-timeout", type=int, default=120,
                    help="Seconds to wait for a VLM response per image.")
     p.add_argument("--vlm-workers", type=int, default=2,
@@ -497,11 +500,12 @@ def main() -> int:
     vlm: Optional[OllamaVLM] = None
     caption_prompt = args.caption_prompt or DEFAULT_CAPTION_PROMPT
     if not args.skip_captioning:
-        vlm = OllamaVLM(args.vlm_model, base_url=args.vlm_url, timeout=args.vlm_timeout)
+        vlm = OllamaVLM(args.vlm_model, base_url=args.vlm_url, timeout=args.vlm_timeout,
+                        api=args.vlm_api)
         if not vlm.is_available():
             print(
-                f"WARNING: Ollama not reachable at {args.vlm_url}. "
-                "Captions will be skipped. Install Ollama or pass --skip-captioning.",
+                f"WARNING: VLM server not reachable at {args.vlm_url}. "
+                "Captions will be skipped. Start the server or pass --skip-captioning.",
                 file=sys.stderr,
             )
             vlm = None

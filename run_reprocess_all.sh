@@ -43,6 +43,7 @@ uv run python immich_caption_and_tag_v2.py \
   --taxonomy-map labels_taxonomy_map.csv \
   --db-path .immich_tagger_v2_cache.sqlite3 \
   --vlm-model qwen2.5vl:7b \
+  --vlm-url http://localhost:8082 --vlm-api openai \
   2>&1 | tee -a "$LOG"
 
 # ── Step 2: reprocess-all backfill (runs uninterrupted until fully caught up) ─
@@ -52,6 +53,7 @@ uv run python immich_caption_and_tag_v2.py \
   --taxonomy-map labels_taxonomy_map.csv \
   --db-path .immich_tagger_v2_cache.sqlite3 \
   --vlm-model qwen2.5vl:7b \
+  --vlm-url http://localhost:8082 --vlm-api openai \
   --reprocess-all \
   --reprocess-captions \
   2>&1 | tee -a "$LOG"

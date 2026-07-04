@@ -23,15 +23,23 @@ class OllamaVLM:
         base_url: str = "http://localhost:11434",
         timeout: int = 120,
         temperature: float = 0.3,
+        api: str = "ollama",
     ):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.temperature = temperature
+        # "ollama" = Ollama /api/chat; "openai" = llama-server /v1/chat/completions.
+        # The direct llama-server path exists because Ollama refuses to offload
+        # the qwen2.5-vl vision encoder on shared-memory iGPUs (CPU CLIP was the
+        # pipeline bottleneck at ~14s/image); llama-server with the Vulkan
+        # backend runs it on the 890M at ~2x total caption speed.
+        self.api = api
 
     def is_available(self) -> bool:
+        probe = "/api/tags" if self.api == "ollama" else "/health"
         try:
-            req = urllib.request.Request(f"{self.base_url}/api/tags", method="GET")
+            req = urllib.request.Request(f"{self.base_url}{probe}", method="GET")
             with urllib.request.urlopen(req, timeout=5):
                 return True
         except Exception:
@@ -63,26 +71,45 @@ class OllamaVLM:
         # Collapse blank line left by empty people_clause
         prompt = "\n".join(line for line in prompt.splitlines() if line.strip())
 
-        body = {
-            "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                    "images": [b64],
-                }
-            ],
-            "stream": False,
-            # Keep the model resident: the default 5m keep_alive made Ollama
-            # unload + reload the ~5GB model whenever classification between
-            # caption batches took longer than 5 minutes.
-            "keep_alive": -1,
-            "options": {"temperature": self.temperature},
-        }
+        if self.api == "openai":
+            path = "/v1/chat/completions"
+            body = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url",
+                             "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                        ],
+                    }
+                ],
+                "max_tokens": 120,
+                "temperature": self.temperature,
+            }
+        else:
+            path = "/api/chat"
+            body = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt,
+                        "images": [b64],
+                    }
+                ],
+                "stream": False,
+                # Keep the model resident: the default 5m keep_alive made Ollama
+                # unload + reload the ~5GB model whenever classification between
+                # caption batches took longer than 5 minutes.
+                "keep_alive": -1,
+                "options": {"temperature": self.temperature},
+            }
 
         data = json.dumps(body).encode()
         req = urllib.request.Request(
-            f"{self.base_url}/api/chat",
+            f"{self.base_url}{path}",
             data=data,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -90,10 +117,13 @@ class OllamaVLM:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 result = json.loads(resp.read())
-            text = result.get("message", {}).get("content", "").strip()
+            if self.api == "openai":
+                text = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            else:
+                text = result.get("message", {}).get("content", "").strip()
             return text or None
         except urllib.error.HTTPError as exc:
             body_text = exc.read().decode(errors="replace") if exc.fp else ""
-            raise RuntimeError(f"Ollama HTTP {exc.code}: {body_text}") from exc
+            raise RuntimeError(f"VLM HTTP {exc.code}: {body_text}") from exc
         except Exception:
             return None

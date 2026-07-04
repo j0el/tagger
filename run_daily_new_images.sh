@@ -16,6 +16,7 @@ uv run python immich_caption_and_tag_v2.py \
   --taxonomy-map labels_taxonomy_map.csv \
   --db-path .immich_tagger_v2_cache.sqlite3 \
   --vlm-model qwen2.5vl:7b \
+  --vlm-url http://localhost:8082 --vlm-api openai \
   "$@"
 
 echo "===== $(date) Finished daily Immich caption/tag run ====="
