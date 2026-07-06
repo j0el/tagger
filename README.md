@@ -52,6 +52,7 @@ Everything current lives at the top level. Each Python file carries a docstring 
 
 | File | Purpose |
 | --- | --- |
+| `generate_taxonomy.py` | Regenerates the two taxonomy files from the library's own captions: `extract` mines noun candidates into an editable frequency-ordered list, `build` turns the edited list into `labels_curated_hierarchical.txt` + `labels_taxonomy_map.csv` via the local llama-server. See "Where the two files come from". |
 | `demo_comparison.py` | Compares existing Immich captions/tags vs what the pipeline would produce for N random assets. Useful before committing to a full reprocess. |
 | `timing_test.py` | VLM benchmark: captions the same N images and reports seconds/image and tokens/second. Useful when tuning server flags or trying a different model. |
 
@@ -397,15 +398,35 @@ checked in and edited by hand. Their history:
 - Both files feed the per-asset model signature, so any edit makes the next
   `--reprocess-all` run re-tag the whole library — that's the intended way changes roll out.
 
-**To rebuild from scratch or mine fresh candidates**, the old sidecar-based tool no longer
-applies (v2 has no sidecars — captions live in Immich asset descriptions). The v2
-equivalent is to pull all descriptions via the Immich API (`immich_api.py` already has the
-client) and run the same noun-frequency analysis over them. The removed tool is still
-retrievable as a reference for the filtering heuristics:
+**To rebuild from scratch or mine fresh candidates**, use `generate_taxonomy.py`
+(the v2 replacement for the removed sidecar tool — captions now come from Immich asset
+descriptions via the API):
 
 ```bash
-git show c087e7e:caption_noun_candidates.py
+# 1. Mine noun candidates from every caption in the library (read-only, ~3 min
+#    for ~19k assets). Writes tag_candidates.txt, ordered by frequency:
+uv run python generate_taxonomy.py extract
+
+# 2. Edit tag_candidates.txt by hand: DELETE the lines you don't want as labels.
+#    The trailing "# 412x in 380 captions" comments are informational only.
+
+# 3. Build the hierarchy from what's left. Each surviving label is assigned a
+#    2-3 level path by the local llama-server (top-level categories default to
+#    the ones in the existing taxonomy map; override with --top-levels).
+#    Existing output files are backed up to *.bak-<timestamp> first:
+uv run python generate_taxonomy.py build
+
+# Preview the label -> path mapping without writing anything:
+uv run python generate_taxonomy.py build --dry-run
 ```
+
+Extraction filters people's names (from Immich face recognition — those belong to face
+tags, not the taxonomy), caption boilerplate, and rare terms (`--min-count`, `--min-docs`,
+`--max-doc-pct`). Adjacent-word phrases like `palm tree` are included by default
+(`--no-bigrams` to disable). Expect to do real pruning in step 2 — the miner is
+deliberately over-inclusive, and the hierarchy is only as good as the label list you
+leave behind. After building, follow the re-tag workflow below: changing either file
+invalidates every cache entry, so the next `--reprocess-all` re-tags the whole library.
 
 ## How captioning works
 
