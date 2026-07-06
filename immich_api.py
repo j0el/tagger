@@ -35,6 +35,7 @@ class AssetInfo:
     file_name: str
     description: Optional[str]
     people_names: list[str]
+    asset_type: str = "IMAGE"  # Immich AssetTypeEnum: IMAGE / VIDEO / AUDIO / OTHER
 
 
 @dataclass
@@ -207,6 +208,7 @@ class ImmichClient:
             file_name=item.get("originalFileName", ""),
             description=description,
             people_names=people_names,
+            asset_type=item.get("type", "IMAGE"),
         )
 
     # ------------------------------------------------------------------ #
@@ -219,6 +221,12 @@ class ImmichClient:
             f"/api/assets/{asset_id}/thumbnail?size=preview",
             binary=True,
         )
+        assert isinstance(data, bytes)
+        return data
+
+    def get_original(self, asset_id: str) -> bytes:
+        """Download the original media file (image or video)."""
+        data = self._request("GET", f"/api/assets/{asset_id}/original", binary=True)
         assert isinstance(data, bytes)
         return data
 

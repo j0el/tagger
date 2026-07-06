@@ -6,7 +6,10 @@ filesystem access to the library.
 
 For each asset the pipeline:
 
-1. downloads the Immich preview thumbnail,
+1. downloads the Immich preview thumbnail — falling back to the original file when Immich
+   has no generated thumbnail (for videos, e.g. MVIMG motion-photo clips, a first frame is
+   extracted locally with `ffmpeg`; assets with no obtainable pixels are skipped, counted
+   as `skipped_no_media`, not errors),
 2. runs SigLIP zero-shot classification against a curated list of ~330 candidate labels,
 3. maps the winning labels into a hierarchical taxonomy and assigns them as `ai:`-prefixed
    Immich tags (creating parent tags as needed, so Immich shows a browsable tree),
@@ -84,6 +87,10 @@ uv sync
 ```
 
 The SigLIP model (~3.5 GB) downloads from Hugging Face automatically on first run.
+
+`ffmpeg` (any recent version, `apt install ffmpeg`) is an optional dependency used to extract
+a still frame from video assets that have no Immich thumbnail; without it those assets are
+skipped (`skipped_no_media`), never errored.
 
 ### 2. Immich credentials
 
@@ -420,7 +427,11 @@ Notes:
 ## Monitoring
 
 - `tail -f logs/reprocess_all.log` / `logs/daily_new_images.log` — run output, per-run
-  summary line: `Done. assets=... written=... skipped_cached=... captions=... errors=...`.
+  summary line: `Done. assets=... written=... skipped_cached=... skipped_no_media=...
+  captions=... errors=...`. `skipped_no_media` counts assets with no thumbnail and no
+  usable fallback (original download failed, or ffmpeg couldn't extract a video frame) —
+  they are retried on the next reprocess run but don't fail the run. Per-asset error
+  detail is only printed with `--verbose`.
 - `logs/health.log` — hourly one-liners with temps, memory, PSI, `gpu_busy`, and
   `imgs_total` / `imgs_last_hour` straight from the cache DB. If `imgs_last_hour=0` while a
   run should be active, something is stuck.

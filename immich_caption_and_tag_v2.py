@@ -19,8 +19,11 @@ import json
 import os
 import queue
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -230,6 +233,32 @@ def normalize_image_for_model(img: Image.Image, max_side: int) -> Image.Image:
             Image.Resampling.LANCZOS,
         )
     return img
+
+
+def extract_video_frame(video_bytes: bytes) -> bytes:
+    """Extract the first frame of a video as JPEG bytes via ffmpeg.
+
+    Used for assets Immich has no thumbnail for (e.g. MVIMG motion-photo
+    videos). ffmpeg needs a seekable input for mp4, hence the temp file.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg not installed")
+    with tempfile.NamedTemporaryFile(suffix=".mp4") as tmp:
+        tmp.write(video_bytes)
+        tmp.flush()
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-i", tmp.name,
+                "-frames:v", "1", "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "2", "-",
+            ],
+            capture_output=True,
+            timeout=120,
+        )
+    if proc.returncode != 0 or not proc.stdout:
+        raise RuntimeError(
+            f"ffmpeg failed: {proc.stderr.decode(errors='replace').strip() or 'no output'}"
+        )
+    return proc.stdout
 
 
 class ZeroShotRunner:
@@ -558,6 +587,7 @@ def main() -> int:
 
     written = 0
     skipped = 0
+    skipped_no_media = 0
     errors = 0
     caption_count = 0
 
@@ -648,18 +678,46 @@ def main() -> int:
                 writer_totals["errors"] += 1
                 print(f"API write error for {asset.id}: {exc}", file=sys.stderr)
 
-    def fetch_one(asset: AssetInfo) -> Optional[Tuple[AssetInfo, Image.Image, bytes]]:
+    def fetch_source_bytes(asset: AssetInfo) -> Optional[bytes]:
+        """Image bytes for an asset: its Immich thumbnail, else the original
+        (photos as-is, videos via an ffmpeg-extracted first frame).
+
+        Returns None when no pixels can be had at all — the asset is then
+        skipped, not counted as an error (e.g. MVIMG motion-photo videos on a
+        host without ffmpeg)."""
         try:
-            thumb_bytes = client.get_thumbnail(asset.id)
-            orig = Image.open(io.BytesIO(thumb_bytes))
+            return client.get_thumbnail(asset.id)
+        except Exception as thumb_exc:
+            try:
+                orig_bytes = client.get_original(asset.id)
+                if asset.asset_type == "VIDEO":
+                    return extract_video_frame(orig_bytes)
+                return orig_bytes
+            except Exception as orig_exc:
+                if args.verbose:
+                    print(
+                        f"No usable media for {asset.id} ({asset.file_name}): "
+                        f"thumbnail: {thumb_exc}; original: {orig_exc} — skipping",
+                        file=sys.stderr,
+                    )
+                return None
+
+    # Sentinel from fetch_one: asset has no fetchable pixels — skip, not an error.
+    SKIP_NO_MEDIA = "skip_no_media"
+
+    def fetch_one(asset: AssetInfo) -> Tuple[AssetInfo, Image.Image, bytes] | str | None:
+        src_bytes = fetch_source_bytes(asset)
+        if src_bytes is None:
+            return SKIP_NO_MEDIA
+        try:
+            orig = Image.open(io.BytesIO(src_bytes))
             img = normalize_image_for_model(orig, args.max_side)
             vlm_img = normalize_image_for_model(orig, args.vlm_max_side)
             vlm_buf = io.BytesIO()
             vlm_img.save(vlm_buf, format="JPEG", quality=90)
             return (asset, img, vlm_buf.getvalue())
         except Exception as exc:
-            if args.verbose:
-                print(f"Thumbnail error {asset.id} ({asset.file_name}): {exc}", file=sys.stderr)
+            print(f"Image decode error {asset.id} ({asset.file_name}): {exc}", file=sys.stderr)
             return None
 
     caption_threads = [
@@ -694,8 +752,9 @@ def main() -> int:
             continue
 
         fetched = list(fetch_pool.map(fetch_one, uncached))
+        skipped_no_media += sum(1 for f in fetched if f == SKIP_NO_MEDIA)
         errors += sum(1 for f in fetched if f is None)
-        to_process = [f for f in fetched if f is not None]
+        to_process = [f for f in fetched if isinstance(f, tuple)]
         if not to_process:
             continue
 
@@ -756,7 +815,7 @@ def main() -> int:
 
     print(
         f"\nDone. assets={len(assets)} written={written} skipped_cached={skipped} "
-        f"captions={caption_count} errors={errors}"
+        f"skipped_no_media={skipped_no_media} captions={caption_count} errors={errors}"
     )
     if args.dry_run:
         print("Dry run — nothing written to Immich.")
