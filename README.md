@@ -63,10 +63,9 @@ Everything current lives at the top level. Each Python file carries a docstring 
 
 The earlier **v1 sidecar-based toolkit is gone**: `immich_caption_and_tag.py`, `tag_stats.py`,
 `taxonomy_manager.py`, `caption_noun_candidates.py`, `mirror_dc_subject_to_immich_xmp_tags.py`,
-`remove_sidecar_tags_v2.py`, the Streamlit GUI, and their READMEs no longer exist. Any untracked
-leftovers in the working directory (`tagger_caption_rescue*.py`, `tag_stats_*.csv/json`,
-`demo_report*.txt`, `.immich_auto_tagger_cache.sqlite3`, `logs/daily_tagger.*.log`) are v1-era
-remnants, not part of the pipeline.
+`remove_sidecar_tags_v2.py`, the Streamlit GUI, and their READMEs no longer exist, and the
+v1-era working files (rescue scripts, tag-stats reports, the v1 cache DB) have been cleaned
+out of the working directory.
 
 ## Installation
 
