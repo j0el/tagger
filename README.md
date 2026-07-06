@@ -369,6 +369,44 @@ exists, the caption's words (crudely stemmed: `hiking → hike`, `dogs → dog`)
 against the taxonomy labels, and up to 5 matching labels' hierarchy tags are assigned. Disable
 with `--no-caption-tags`.
 
+### Where the two files come from (and how to regenerate them)
+
+Neither file is produced by anything in this repo — both are **curated source data**,
+checked in and edited by hand. Their history:
+
+1. **Initial curation** (commit `0ef0514`, 2026-05-10): the label list and hierarchy map
+   were authored manually — concepts chosen for being things SigLIP can plausibly score,
+   grouped into commented sections, each given one or more hierarchy paths.
+2. **One-time caption-mining extension** (commit `41e929b`, 2026-05-13): a since-removed
+   v1 tool, `caption_noun_candidates.py`, read all existing captions (then in XMP
+   sidecars), built a noun frequency table, filtered it (minimum total/per-document
+   counts, a ceiling on "appears in too many captions to be discriminating", stopword and
+   generic-noun lists), and appended ~50 surviving candidates to both files under a
+   `Prospective/Nouns` section.
+
+**To extend or edit them today**, change both files by hand, keeping them in sync:
+
+- `labels_curated_hierarchical.txt`: one label per line; `# --- Section ---` comment lines
+  are ignored, so use them freely for grouping. Labels should be short, visual, concrete
+  phrases (`boat`, `birthday party`) — SigLIP scores them as-is.
+- `labels_taxonomy_map.csv`: header `label,tags`; one row per label; multiple hierarchy
+  paths separated by `|` (or `;`). A label without a row still works but produces a flat
+  `ai:<label>` tag instead of a placed one.
+- Verify a new label actually fires before trusting it: `--asset-id <uuid> --force
+  --dry-run --verbose` shows the top-5 raw SigLIP scores (see "Updating and re-tagging").
+- Both files feed the per-asset model signature, so any edit makes the next
+  `--reprocess-all` run re-tag the whole library — that's the intended way changes roll out.
+
+**To rebuild from scratch or mine fresh candidates**, the old sidecar-based tool no longer
+applies (v2 has no sidecars — captions live in Immich asset descriptions). The v2
+equivalent is to pull all descriptions via the Immich API (`immich_api.py` already has the
+client) and run the same noun-frequency analysis over them. The removed tool is still
+retrievable as a reference for the filtering heuristics:
+
+```bash
+git show c087e7e:caption_noun_candidates.py
+```
+
 ## How captioning works
 
 1. Only assets with **no existing description** are captioned (or all selected assets when
