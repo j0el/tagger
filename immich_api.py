@@ -151,6 +151,16 @@ class ImmichClient:
 
         return self._tag_cache[value].id
 
+    def find_tag_id(self, value: str) -> Optional[str]:
+        """Look up a tag's ID by its full hierarchical value (e.g. "ai:water/marine/boat").
+
+        Loads the tag cache on first use. Returns None if no such tag exists.
+        """
+        if not self._tag_cache:
+            self.load_all_tags()
+        info = self._tag_cache.get(value)
+        return info.id if info else None
+
     # ------------------------------------------------------------------ #
     # Asset search                                                          #
     # ------------------------------------------------------------------ #
@@ -181,6 +191,24 @@ class ImmichClient:
             if block.get("nextPage") is None:
                 break
             page += 1
+
+    def search_random(
+        self,
+        count: int,
+        asset_type: str = "IMAGE",
+        tag_ids: Optional[list[str]] = None,
+    ) -> list[AssetInfo]:
+        """Return up to *count* random assets (with EXIF, so descriptions are populated).
+
+        If *tag_ids* is given, results are restricted to assets carrying all of those tags
+        (Immich ANDs multiple tagIds together).
+        """
+        body: dict = {"size": count, "type": asset_type, "withExif": True}
+        if tag_ids:
+            body["tagIds"] = tag_ids
+        resp = self._request("POST", "/api/search/random", body=body)
+        assert isinstance(resp, list)
+        return [self._parse_asset(item) for item in resp]
 
     def get_asset_by_id(self, asset_id: str) -> AssetInfo:
         data = self._request("GET", f"/api/assets/{asset_id}")

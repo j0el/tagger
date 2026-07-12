@@ -55,6 +55,7 @@ Everything current lives at the top level. Each Python file carries a docstring 
 | `generate_taxonomy.py` | Regenerates the two taxonomy files from the library's own captions: `extract` mines noun candidates into an editable frequency-ordered list, `build` turns the edited list into `labels_curated_hierarchical.txt` + `labels_taxonomy_map.csv` via the local llama-server. See "Where the two files come from". |
 | `demo_comparison.py` | Compares existing Immich captions/tags vs what the pipeline would produce for N random assets. Useful before committing to a full reprocess. |
 | `timing_test.py` | VLM benchmark: captions the same N images and reports seconds/image and tokens/second. Useful when tuning server flags or trying a different model. |
+| `random_caption_pdf.py` | Contact-sheet PDF of N random images with their captions, 3×3 grid per letter page: `uv run python random_caption_pdf.py 30 sample.pdf`. Read-only spot-check of caption quality. |
 
 ### Project files
 
